@@ -1,0 +1,41 @@
+openapi: 3.1.0
+info:
+  title: 1145ai channel endpoints (MVP, no third-party approvals)
+  version: 0.1.0
+paths:
+  /v1/owner-chat/messages:
+    post:
+      operationId: postOwnerChatMessage
+      security: [ { cognito: [] } ]
+      description: Owner web chat (onboarding before a tenant exists, copilot after). Enqueued to the FIFO router; the reply arrives on AppSync Events /owners/<sub>/chat.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [text, clientMessageId], properties: { text: { type: string, maxLength: 4000 }, clientMessageId: { type: string, maxLength: 64 }, referralCode: { type: string, pattern: '^[A-Za-z0-9_-]{4,64}$' } } } } } }
+      responses: { '202': { description: Accepted } }
+  /v1/webchat/token:
+    post:
+      operationId: createCustomerWebchatToken
+      security: []
+      description: Public. Widget key (published on the tenant's site) -> short-lived LiveKit token for a text-only room. Rate limited per IP and per widget key. The tenant is resolved server-side; the client never sends a tenant id.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [widgetKey], properties: { widgetKey: { type: string, pattern: '^wk_[A-Za-z0-9]{16,40}$' } } } } } }
+      responses: { '200': { description: '{ url, token, roomName, agentName, greeting }' }, '404': { description: Unknown widget } }
+  /r/{code}:
+    get:
+      operationId: referralRedirect
+      security: []
+      parameters: [ { name: code, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{4,64}$' } } ]
+      responses: { '302': { description: 'Redirect to https://app.1145.ai/start?ref=<code>; click recorded as REFCLICK#<code>' } }
+  /telegram:
+    post:
+      operationId: telegramWebhook
+      security: [ { telegramSecret: [] } ]
+      responses: { '200': { description: Enqueued or ignored } }
+  /internal/resolve/widget:
+    post:
+      operationId: resolveWidget
+      security: [ { serviceIam: [] } ]
+      description: Voice worker resolves a chat room's widget key to tenant runtime config and a call-scoped token (same shape as /internal/resolve/number).
+      responses: { '200': { description: ResolvedCall }, '404': { description: Unknown widget } }
+components:
+  securitySchemes:
+    cognito: { type: http, scheme: bearer, bearerFormat: JWT }
+    telegramSecret: { type: apiKey, in: header, name: X-Telegram-Bot-Api-Secret-Token }
+    serviceIam: { type: apiKey, in: header, name: Authorization, description: SigV4 }

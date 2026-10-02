@@ -1,0 +1,11 @@
+{
+  "channel": "chat",
+  "personName": "Kemi",
+  "turns": [
+    { "role": "agent", "text": "Hey Kemi! Looks like Dayo sent you over. I set up an AI receptionist that answers your shop's phone and books people in. Takes about five minutes. What's the business called?" },
+    { "role": "user", "text": "Kemi Cuts, barber shop in Frisco" },
+    { "role": "agent", "text": "Nice, barbers are a great fit. Do you have a website or Google listing I can pull your details from?" },
+    { "role": "user", "text": "kemicuts.com" },
+    { "role": "agent", "text": "Got it. I'm grabbing you a local number now. While that runs, what are your hours? Just type them however, like 'Tue–Sat 9 to 6'." }
+  ]
+}

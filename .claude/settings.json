@@ -1,13 +1,22 @@
 {
+  "env": {
+    "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "30"
+  },
+  "worktree": { "baseRef": "fresh" },
   "permissions": {
     "allow": [
       "Bash(pnpm:*)", "Bash(npx vitest:*)", "Bash(npx tsc:*)", "Bash(uv:*)",
       "Bash(make test:*)", "Bash(make typecheck:*)", "Bash(make synth:*)",
-      "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git add:*)", "Bash(git commit:*)", "Bash(git worktree list:*)"
+      "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git add:*)", "Bash(git commit:*)",
+      "Bash(git checkout:*)", "Bash(git switch:*)", "Bash(git fetch:*)", "Bash(git rebase:*)", "Bash(git push:*)",
+      "Bash(git worktree:*)",
+      "Bash(gh pr create:*)", "Bash(gh pr view:*)", "Bash(gh pr checks:*)", "Bash(gh pr list:*)", "Bash(gh pr comment:*)",
+      "Bash(gh run view:*)", "Bash(gh run list:*)",
+      "mcp__linear", "mcp__context7", "mcp__aws-knowledge", "mcp__livekit-docs"
     ],
     "deny": [
-      "Bash(cdk deploy:*)", "Bash(npx cdk deploy:*)", "Bash(pnpm cdk deploy:*)",
-      "Bash(aws:*)", "Bash(git push:*)", "Bash(curl:*)",
+      "Bash(git push --force:*)", "Bash(git push -f:*)", "Bash(gh pr merge:*)", "Bash(gh repo delete:*)",
+      "Bash(cdk deploy:*)", "Bash(npx cdk deploy:*)", "Bash(pnpm cdk deploy:*)", "Bash(aws:*)", "Bash(curl:*)",
       "Read(./.env)", "Read(./.env.*)"
     ]
   }

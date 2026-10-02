@@ -1,5 +1,8 @@
 # Architecture review: "Three flows, two engines" (v1)
 
+> **Update 2026-10-02:** the owner removed every third-party approval from the MVP (ADR-0005). WhatsApp, SMS,
+> Calendar sync and app-store distribution moved to Phase 2. Where this review mentions them as async unlocks, read Phase 2.
+
 **Reviewed:** 1145ai-architecture-userflow-two-options.pdf · **Date:** 2026-10-02 · **Status:** Proposed edits, awaiting owner approval (Gate 0)
 
 ## Verdict

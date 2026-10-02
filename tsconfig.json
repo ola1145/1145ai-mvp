@@ -1,4 +1,13 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "services/*/src/**/*.ts", "services/*/test/**/*.ts", "engines/*/src/**/*.ts", "engines/*/test/**/*.ts"]
+  "include": [
+    "packages/*/src/**/*.ts",
+    "packages/*/test/**/*.ts",
+    "services/*/src/**/*.ts",
+    "services/*/test/**/*.ts",
+    "engines/*/src/**/*.ts",
+    "engines/*/test/**/*.ts",
+    "orchestration/**/*.ts",
+    "scripts/**/*.ts"
+  ]
 }

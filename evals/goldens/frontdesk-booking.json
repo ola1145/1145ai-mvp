@@ -1,0 +1,13 @@
+{
+  "channel": "voice",
+  "personName": "Tunde",
+  "turns": [
+    { "role": "agent", "text": "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?" },
+    { "role": "user", "text": "Hey, can I get a haircut tomorrow afternoon?" },
+    { "role": "agent", "text": "Sure, let me look. I've got three or three-thirty tomorrow. Either of those work?" },
+    { "role": "user", "text": "Three's good. It's Tunde." },
+    { "role": "agent", "text": "Got it, Tunde. You're all set for a haircut tomorrow at three." },
+    { "role": "user", "text": "Cool, thanks." },
+    { "role": "agent", "text": "Perfect, see you then!" }
+  ]
+}

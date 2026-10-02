@@ -1,12 +1,10 @@
 agent: onboarding
-channel: whatsapp
+channel: webchat
 referral_code: FRIEND1
 turns:
   - owner: "Hi, my friend sent me. ref:FRIEND1"
     expect: { reply_max_chars: 600 }
   - owner: "Kemi Cuts, barber shop in Frisco TX, kemicuts.com"
-    expect: { tools_called: [save_business_basics, send_signup_link] }
-  - owner: "YES"
-    expect: { tools_called: [start_provisioning] }
+    expect: { tools_called: [save_business_basics, start_provisioning], tools_not_called: [send_signup_link] }
   - owner: "Tue to Sat 9 to 6, closed Sunday and Monday"
     expect: { tools_called: [save_hours], reply_contains_any: ["Tuesday", "Tue"] }

@@ -1,25 +1,121 @@
 name: ci
 on:
-  pull_request: {}
-  push: { branches: [main] }
-permissions: { contents: read }
+  pull_request:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review]
+  merge_group: {}
+  push:
+    branches: [main]
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
 jobs:
   typescript:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
-      - run: cd infra/cdk && pnpm tsc -p tsconfig.json && pnpm cdk synth -q
+
   python:
     runs-on: ubuntu-latest
-    strategy:
-      matrix: { pkg: [engines/livekit-agent, agents] }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v5
-      - run: cd ${{ matrix.pkg }} && uv run pytest -q
+        with: { enable-cache: true }
+      - run: uv run pytest -q
+        working-directory: engines/livekit-agent
+      - run: uv run pytest -q
+        working-directory: agents
+
+  cdk-synth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm cdk synth -q
+        working-directory: infra/cdk
+        env: { CDK_DEFAULT_ACCOUNT: "111111111111", CDK_DEFAULT_REGION: us-east-1 }
+
+  ownership:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@v4
+        if: github.event_name == 'pull_request'
+      - uses: actions/setup-node@v4
+        if: github.event_name == 'pull_request'
+        with: { node-version: 22, cache: pnpm }
+      - if: github.event_name == 'pull_request'
+        run: pnpm install --frozen-lockfile && pnpm exec tsx scripts/ci/check-ownership.ts ownership
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      - if: github.event_name != 'pull_request'
+        run: echo "ownership is checked on pull requests"
+
+  contracts-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@v4
+        if: github.event_name == 'pull_request'
+      - uses: actions/setup-node@v4
+        if: github.event_name == 'pull_request'
+        with: { node-version: 22, cache: pnpm }
+      - if: github.event_name == 'pull_request'
+        run: pnpm install --frozen-lockfile && pnpm exec tsx scripts/ci/check-ownership.ts contracts
+        env:
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      - if: github.event_name != 'pull_request'
+        run: echo "contract guard runs on pull requests"
+
+  conversation-style:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsx scripts/ci/check-style.ts
+
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - uses: trufflesecurity/trufflehog@main
+        with: { extra_args: --only-verified }
+
+  main-green:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - if: github.event_name == 'pull_request'
+        run: scripts/ci/main-green.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+      - if: github.event_name != 'pull_request'
+        run: echo "merge freeze applies to pull requests"

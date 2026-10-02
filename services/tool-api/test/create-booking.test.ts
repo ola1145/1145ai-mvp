@@ -11,7 +11,7 @@ describe('createBooking', () => {
     const { deps, published } = makeDeps({ t_tenanta01: repo });
     const res = await createBooking(voiceEvent({ slotStart: SLOT, serviceId: 'cut', customer: { name: 'Ada Obi' } }), deps);
     expect(res.statusCode).toBe(201);
-    expect(JSON.parse(res.body).sayToCaller).toMatch(/Tuesday at 3 PM/);
+    expect(JSON.parse(res.body).sayToCaller).toBe("You're all set for a haircut Tuesday at 3 PM.");
     expect(published.map((e) => e.type)).toEqual(['booking.created']);
     expect(repo.bookings[0]?.customer.phone).toBe('+12145550123');
   });

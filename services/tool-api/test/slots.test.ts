@@ -34,4 +34,10 @@ describe('open slots', () => {
     expect(slots.map((s) => s.start)).toEqual(['2026-10-06T20:15:00.000Z', '2026-10-06T20:30:00.000Z']);
     expect(spoken(TUE_3PM, 'America/Chicago')).toBe('Tuesday at 3 PM');
   });
+  it('speaks relative days like a person', () => {
+    const mon = new Date('2026-10-05T15:00:00Z'); // Monday 10 AM Chicago
+    expect(spoken(TUE_3PM, 'America/Chicago', mon)).toBe('tomorrow at 3 PM');
+    expect(spoken(new Date('2026-10-05T19:30:00Z'), 'America/Chicago', mon)).toBe('today at 2:30 PM');
+    expect(spoken(new Date('2026-10-13T20:00:00Z'), 'America/Chicago', mon)).toBe('Tuesday, October 13 at 3 PM');
+  });
 });

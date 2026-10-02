@@ -12,3 +12,6 @@
 - [ ] No secrets, tokens or tenant IDs in prompts, logs at INFO, or events.
 - [ ] Errors on the voice path degrade to "take a message".
 - [ ] New IAM permissions are tenant-scoped (LeadingKeys / prefix) or justified in the PR.
+- [ ] No dependency on a third-party approval (WhatsApp/Meta, SMS/10DLC, Calendar sensitive scopes, SES production access, app stores). See ADR-0005.
+- [ ] No new package dependencies outside the P3 dependency batch (lockfile is owned by P3).
+- [ ] Agent-facing text passes `@1145/conversation-style` checks (no robotic phrasing).

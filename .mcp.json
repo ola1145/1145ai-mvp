@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "linear": { "type": "http", "url": "https://mcp.linear.app/mcp" },
+    "github": { "type": "http", "url": "https://api.githubcopilot.com/mcp/", "headers": { "Authorization": "Bearer ${GITHUB_MCP_PAT}" } },
+    "aws-knowledge": { "type": "http", "url": "https://knowledge-mcp.global.api.aws" },
+    "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" },
+    "livekit-docs": { "type": "http", "url": "https://docs.livekit.io/mcp" },
+    "stripe": { "type": "http", "url": "https://mcp.stripe.com", "headers": { "Authorization": "Bearer ${STRIPE_MCP_TEST_KEY}" } }
+  }
+}

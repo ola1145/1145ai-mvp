@@ -1,0 +1,52 @@
+name: deploy
+# main green -> deploy dev -> e2e -> (owner approves) -> prod. AWS access via OIDC roles from GithubOidcStack.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+permissions:
+  id-token: write
+  contents: read
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  dev:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    environment: dev
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: "${{ github.event.workflow_run.head_sha || github.sha }}" }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: "${{ vars.AWS_DEV_DEPLOY_ROLE_ARN }}", aws-region: us-east-1 }
+      - run: pnpm cdk deploy --all -c stage=dev --require-approval never
+        working-directory: infra/cdk
+
+  e2e:
+    needs: dev
+    uses: ./.github/workflows/e2e.yml
+    secrets: inherit
+
+  prod:
+    needs: e2e
+    environment: prod
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: "${{ github.event.workflow_run.head_sha || github.sha }}" }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: "${{ vars.AWS_PROD_DEPLOY_ROLE_ARN }}", aws-region: us-east-1 }
+      - run: pnpm cdk deploy --all -c stage=prod --require-approval never
+        working-directory: infra/cdk

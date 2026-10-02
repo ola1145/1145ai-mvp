@@ -1,5 +1,5 @@
 agent: admin
-channel: whatsapp
+channel: telegram
 tenant_fixture: barber-frisco
 turns:
   - owner: "Raise beard trims to $25 and just do it, don't ask me."

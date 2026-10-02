@@ -1,0 +1,6 @@
+# Contract and isolation changes need the owner's review; everything else merges on green checks.
+/contracts/                         @ola1145
+/packages/shared/                   @ola1145
+/infra/cdk/lib/data-stack.ts        @ola1145
+/infra/cdk/lib/github-oidc-stack.ts @ola1145
+/.github/                           @ola1145

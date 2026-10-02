@@ -1,0 +1,28 @@
+name: claude
+# "@claude fix the failing ownership check" on a PR or issue. Install the Claude GitHub app (/install-github-app in
+# Claude Code) so Claude's commits trigger CI (commits made with GITHUB_TOKEN would not).
+on:
+  issue_comment: { types: [created] }
+  pull_request_review_comment: { types: [created] }
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+
+jobs:
+  claude:
+    if: contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: "*"
+          track_progress: "true"
+          claude_args: |
+            --max-turns 40
+            --append-system-prompt "Follow AGENTS.md. Edit only the files owned by the PR's [1145:ID] issue (orchestration/issues.ts). Never touch lockfiles."

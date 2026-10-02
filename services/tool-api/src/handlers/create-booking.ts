@@ -44,7 +44,7 @@ export async function createBooking(event: HttpEvent, deps: ToolDeps & AuthDeps)
   const response = {
     bookingId: booking.bookingId, start: booking.start, end: booking.end, serviceId: booking.serviceId,
     status: booking.status, customerFirstName: customerName.split(/\s+/)[0],
-    sayToCaller: `You're booked for ${service.name} on ${spoken(start, hours.timezone)}.`,
+    sayToCaller: `You're all set for a ${service.name.toLowerCase()} ${spoken(start, hours.timezone, deps.now())}.`,
   };
 
   try {

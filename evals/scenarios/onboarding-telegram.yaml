@@ -1,0 +1,10 @@
+agent: onboarding
+channel: telegram
+referral_code: FRIEND1
+turns:
+  - owner: "/start FRIEND1"
+    expect: { reply_max_chars: 600 }
+  - owner: "Kemi Cuts, barber shop in Frisco TX"
+    expect: { tools_called: [save_business_basics, send_signup_link] }
+  - owner: "YES"
+    expect: { tools_called: [start_provisioning] }

@@ -46,18 +46,25 @@ export function alignUp(d: Date, granularityMin = SLOT_GRANULARITY_MIN): Date {
   return new Date(Math.ceil(d.getTime() / g) * g);
 }
 
-export function spoken(d: Date, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'long', hour: 'numeric', minute: '2-digit', hour12: true }).formatToParts(d);
+/** How a person would say it: "today at 3 PM", "tomorrow at 9:30 AM", "Tuesday at 3 PM", "Tuesday, October 13 at 3 PM". */
+export function spoken(d: Date, timeZone: string, now?: Date): string {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }).formatToParts(d);
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
   const minute = get('minute');
   const time = minute === '00' ? `${get('hour')} ${get('dayPeriod')}` : `${get('hour')}:${minute} ${get('dayPeriod')}`;
+  if (now) {
+    const dayDiff = Math.round((Date.parse(localParts(d, timeZone).ymd) - Date.parse(localParts(now, timeZone).ymd)) / 86_400_000);
+    if (dayDiff === 0) return `today at ${time}`;
+    if (dayDiff === 1) return `tomorrow at ${time}`;
+    if (dayDiff > 6) return `${get('weekday')}, ${get('month')} ${get('day')} at ${time}`;
+  }
   return `${get('weekday')} at ${time}`;
 }
 
 /** Candidate starts in [from, to) that fit business hours and do not overlap a locked instant. */
 export function openSlots(params: {
   hours: BusinessHours; from: Date; to: Date; durationMin: number; locked: ReadonlySet<string>;
-  maxResults?: number; notBefore?: Date;
+  maxResults?: number; notBefore?: Date; now?: Date;
 }): Array<{ start: string; end: string; spoken: string }> {
   const { hours, durationMin, locked } = params;
   const max = params.maxResults ?? 5;
@@ -69,7 +76,7 @@ export function openSlots(params: {
     const end = new Date(cursor.getTime() + durationMin * MS_MIN);
     if (end > params.to || !isWithinHours(hours, cursor, end)) continue;
     if (slotInstants(cursor, durationMin).some((iso) => locked.has(iso))) continue;
-    out.push({ start: cursor.toISOString(), end: end.toISOString(), spoken: spoken(cursor, hours.timezone) });
+    out.push({ start: cursor.toISOString(), end: end.toISOString(), spoken: spoken(cursor, hours.timezone, params.now ?? params.notBefore) });
   }
   return out;
 }

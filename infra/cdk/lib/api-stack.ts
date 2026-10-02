@@ -10,10 +10,11 @@ import type { Construct } from 'constructs';
 import type { DataStack } from './data-stack.js';
 import { bundlingProps, fromRoot } from './paths.js';
 import type { EventsStack } from './events-stack.js';
+import type { AuthStack } from './auth-stack.js';
 
-interface Props extends StackProps { data: DataStack; events: EventsStack }
+interface Props extends StackProps { data: DataStack; events: EventsStack; auth: AuthStack }
 
-/** Route table mirrors contracts/openapi/tenant-tools.yaml. voice=true -> provisioned concurrency (Add-9). */
+/** Route table mirrors contracts/openapi/tenant-tools.yaml. voice=true -> provisioned concurrency (Add-9). Owner: T7. */
 const ROUTES: Array<{ method: apigw.HttpMethod; path: string; handler: string; voice?: boolean; auth: 'token' | 'iam' }> = [
   { method: apigw.HttpMethod.POST, path: '/v1/tools/availability', handler: 'check-availability', voice: true, auth: 'token' },
   { method: apigw.HttpMethod.POST, path: '/v1/tools/bookings', handler: 'create-booking', voice: true, auth: 'token' },
@@ -31,6 +32,7 @@ const ROUTES: Array<{ method: apigw.HttpMethod; path: string; handler: string; v
   { method: apigw.HttpMethod.PUT, path: '/v1/admin/hours', handler: 'admin-update-hours', auth: 'token' },
   { method: apigw.HttpMethod.PATCH, path: '/v1/admin/services/{serviceId}', handler: 'admin-update-service', auth: 'token' },
   { method: apigw.HttpMethod.POST, path: '/internal/resolve/number', handler: 'internal-resolve-number', voice: true, auth: 'iam' },
+  { method: apigw.HttpMethod.POST, path: '/internal/resolve/widget', handler: 'internal-resolve-widget', voice: true, auth: 'iam' },
 ];
 
 export class ApiStack extends Stack {
@@ -42,8 +44,8 @@ export class ApiStack extends Stack {
     const api = new apigw.HttpApi(this, 'ToolApi', { apiName: `${id}-tools` });
     const iamAuth = new HttpIamAuthorizer();
     // Dashboard routes reuse the same Lambdas under /dash with the Cognito JWT authorizer (claims -> requireTenantContext).
-    const jwtAuth = new HttpJwtAuthorizer('Cognito', `https://cognito-idp.${this.region}.amazonaws.com/${props.events.userPool.userPoolId}`, {
-      jwtAudience: [props.events.userPoolClient.userPoolClientId],
+    const jwtAuth = new HttpJwtAuthorizer('Cognito', `https://cognito-idp.${this.region}.amazonaws.com/${props.auth.userPool.userPoolId}`, {
+      jwtAudience: [props.auth.userPoolClient.userPoolClientId],
     });
 
     for (const r of ROUTES) {

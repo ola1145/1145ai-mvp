@@ -1,0 +1,51 @@
+name: claude-review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  claude-review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Agent PRs come from bots (Devin, Cursor, Claude). Private repo only; see the action's docs/security.md.
+          allowed_bots: "*"
+          use_sticky_comment: "true"
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+            PR TITLE: ${{ github.event.pull_request.title }}
+
+            You are the merge gate for the 1145ai MVP, where ~50 agents open PRs in parallel. The PR branch is checked out.
+            Review the diff (gh pr diff) against:
+            1. docs/checklists/security-review.md (tenant isolation, webhooks, idempotency, injection, step-up).
+            2. ADR-0005: no WhatsApp, SMS/10DLC, Calendar scopes, SES production or app-store dependencies.
+            3. .claude/skills/1145-conversation-style: any text a customer or owner will hear or read must sound like
+               a friendly person, never a call center or a bot.
+            4. The brief in tasks/<ID>.md (ID from the PR title): tests from "Tests first" exist and test the right thing.
+
+            BLOCK only for violations of 1–4. Style nits and suggestions go in comments but do not block.
+            Post one summary with `gh pr comment` and inline comments with
+            mcp__github_inline_comment__create_inline_comment (confirmed: true) for specific lines.
+            Your last action must be exactly one of these commands:
+              echo APPROVE > review-verdict.txt
+              echo BLOCK > review-verdict.txt
+          claude_args: |
+            --max-turns 30
+            --allowedTools "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(echo APPROVE > review-verdict.txt),Bash(echo BLOCK > review-verdict.txt)"
+      - name: Gate on verdict
+        run: |
+          test -f review-verdict.txt || { echo "no verdict written"; exit 1; }
+          grep -qx "APPROVE" review-verdict.txt || { echo "claude-review: BLOCK (see PR comment)"; exit 1; }

@@ -3,14 +3,21 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@9.12.0",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "synth": "pnpm -F @1145/infra synth"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p infra/cdk/tsconfig.json",
+    "synth": "pnpm -F @1145/infra synth",
+    "orchestrate:bootstrap": "tsx orchestration/linear-bootstrap.ts",
+    "orchestrate:dispatch": "tsx orchestration/dispatch.ts",
+    "orchestrate:briefs": "tsx orchestration/render-briefs.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "esbuild": "0.28.2",
+    "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   }

@@ -26,7 +26,7 @@ def make_onboarding_tools(api: Api, onboarding_id: str) -> list[Callable[..., st
         return "Saved." if "error" not in r else "Could not save that. Ask the owner to repeat it."
 
     def send_signup_link() -> str:
-        """Send the owner a private sign-up link as a separate message in this chat. The link is never shown to you."""
+        """Telegram only: send the owner a private sign-up link as a separate message. The link is never shown to you."""
         r = api.post(f"{base}/signup-link", {})
         return "The sign-up link was sent. Ask them to tap it and sign in with Google, then come back here." if "error" not in r else "Could not send the link. Try again in a moment."
 

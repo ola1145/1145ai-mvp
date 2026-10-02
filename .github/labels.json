@@ -1,0 +1,9 @@
+[
+  { "name": "contract-change", "color": "DC2626", "description": "Changes contracts/ or packages/shared (needs owner review)" },
+  { "name": "orchestrator", "color": "D97757", "description": "Repo-wide change by the orchestrator (ownership exempt)" },
+  { "name": "do-not-merge", "color": "000000", "description": "Blocks auto-merge" },
+  { "name": "conversation-quality", "color": "F59E0B", "description": "Affects how agents sound" },
+  { "name": "agent:claude", "color": "D97757", "description": "" },
+  { "name": "agent:devin", "color": "4F46E5", "description": "" },
+  { "name": "agent:cursor-grok", "color": "111827", "description": "" }
+]
