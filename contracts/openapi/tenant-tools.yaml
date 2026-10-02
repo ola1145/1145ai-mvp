@@ -1,0 +1,244 @@
+openapi: 3.1.0
+info:
+  title: 1145ai Tenant Tool API
+  version: 0.1.0
+  description: |
+    The only way agents and the dashboard touch tenant data. The tenant is ALWAYS derived from the
+    credential (tenant token, engine secret + agent id, or Cognito claims). No request body or path
+    carries a tenant id. Voice-path endpoints target p95 <= 300 ms.
+servers:
+  - url: https://api.1145.ai
+security:
+  - tenantToken: []
+paths:
+  /v1/tools/availability:
+    post:
+      operationId: checkAvailability
+      x-principals: [customer-agent, admin-agent, owner]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AvailabilityRequest' } } } }
+      responses:
+        '200': { description: Open slots, content: { application/json: { schema: { $ref: '#/components/schemas/AvailabilityResponse' } } } }
+  /v1/tools/bookings:
+    post:
+      operationId: createBooking
+      x-principals: [customer-agent, admin-agent, owner]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateBookingRequest' } } } }
+      responses:
+        '201': { description: Booked, content: { application/json: { schema: { $ref: '#/components/schemas/Booking' } } } }
+        '409': { description: Slot taken, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /v1/tools/bookings/{bookingId}/reschedule:
+    post:
+      operationId: rescheduleBooking
+      x-principals: [customer-agent, admin-agent, owner]
+      x-requires-verification: customer-agent
+      parameters: [ { $ref: '#/components/parameters/BookingId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [slotStart], properties: { slotStart: { type: string, format: date-time }, verificationCode: { type: string } } } } } }
+      responses: { '200': { description: Rescheduled, content: { application/json: { schema: { $ref: '#/components/schemas/Booking' } } } }, '403': { description: Verification required } }
+  /v1/tools/bookings/{bookingId}/cancel:
+    post:
+      operationId: cancelBooking
+      x-principals: [customer-agent, admin-agent, owner]
+      x-requires-verification: customer-agent
+      parameters: [ { $ref: '#/components/parameters/BookingId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { reason: { type: string, maxLength: 500 }, verificationCode: { type: string } } } } } }
+      responses: { '200': { description: Cancelled }, '403': { description: Verification required } }
+  /v1/tools/messages:
+    post:
+      operationId: takeMessage
+      x-principals: [customer-agent]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TakeMessageRequest' } } } }
+      responses: { '201': { description: Message stored and owner notified } }
+  /v1/tools/kb/search:
+    post:
+      operationId: searchKnowledge
+      x-principals: [customer-agent, admin-agent, owner]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [query], properties: { query: { type: string, maxLength: 500 } } } } } }
+      responses:
+        '200': { description: Owner-confirmed passages only for customer-agent, content: { application/json: { schema: { $ref: '#/components/schemas/KbSearchResponse' } } } }
+  /v1/tools/caller/lookup:
+    post:
+      operationId: lookupCaller
+      x-principals: [customer-agent]
+      description: Caller number comes from the token's call context, never the body. Returns minimal data (caller ID is spoofable).
+      responses:
+        '200': { description: Minimal caller info, content: { application/json: { schema: { $ref: '#/components/schemas/CallerLookupResponse' } } } }
+  /v1/tools/handoff:
+    post:
+      operationId: requestHandoff
+      x-principals: [customer-agent]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [reason], properties: { reason: { type: string, maxLength: 300 } } } } } }
+      responses:
+        '200': { description: What to do next, content: { application/json: { schema: { $ref: '#/components/schemas/HandoffResponse' } } } }
+  /v1/admin/reports/summary:
+    get:
+      operationId: getSummaryReport
+      x-principals: [admin-agent, owner]
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date } }
+      responses: { '200': { description: Calls, bookings, messages, sentiment, minutes used } }
+  /v1/admin/bookings:
+    get:
+      operationId: listBookings
+      x-principals: [admin-agent, owner]
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date-time } }
+      responses: { '200': { description: Bookings in range, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Booking' } } } } } }
+  /v1/admin/hours:
+    put:
+      operationId: updateHours
+      x-principals: [owner]
+      x-requires-confirmation: true
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/BusinessHours' } } } }
+      responses: { '200': { description: Updated; agent config re-synced } }
+  /v1/admin/services/{serviceId}:
+    patch:
+      operationId: updateService
+      x-principals: [owner]
+      x-requires-step-up: [priceCents]
+      parameters: [ { name: serviceId, in: path, required: true, schema: { type: string } }, { $ref: '#/components/parameters/StepUpToken' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ServicePatch' } } } }
+      responses: { '200': { description: Updated }, '428': { description: Step-up confirmation required in dashboard } }
+  /v1/admin/changes:
+    post:
+      operationId: proposeChange
+      x-principals: [admin-agent, owner]
+      description: Stores a pending change and returns a short code. Nothing is applied. The owner replies "CONFIRM <code>" in their bound channel (router applies it) or taps confirm in the dashboard.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kind, payload], properties: { kind: { type: string, enum: [hours, service, closed_date, handoff_number] }, payload: { type: object } } } } } }
+      responses:
+        '201': { description: Pending change, content: { application/json: { schema: { type: object, required: [changeId, code, summary, expiresAt], properties: { changeId: { type: string }, code: { type: string, pattern: '^\d{4}$' }, summary: { type: string }, expiresAt: { type: string, format: date-time }, requiresStepUp: { type: boolean } } } } } }
+  /v1/admin/changes/apply:
+    post:
+      operationId: applyChange
+      x-principals: [owner]
+      description: Called by the router (owner token minted from the verified channel identity) or the dashboard. Price changes still need X-Step-Up-Token from the dashboard.
+      parameters: [ { $ref: '#/components/parameters/StepUpToken' } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code], properties: { code: { type: string, pattern: '^\d{4}$' } } } } } }
+      responses: { '200': { description: Applied; admin.change_applied emitted and audited }, '404': { description: No pending change with that code }, '428': { description: Step-up required } }
+  /v1/admin/conversations:
+    get:
+      operationId: listConversations
+      x-principals: [admin-agent, owner]
+      parameters: [ { name: limit, in: query, schema: { type: integer, maximum: 50, default: 20 } } ]
+      responses: { '200': { description: Recent conversations with summary and sentiment } }
+  /internal/resolve/number:
+    post:
+      operationId: resolveNumber
+      security: [ { serviceIam: [] } ]
+      description: Called by the voice worker with service credentials. Returns runtime config and a call-scoped tenant token.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [dialed, caller, callId], properties: { dialed: { $ref: '#/components/schemas/E164' }, caller: { type: string }, callId: { type: string } } } } } }
+      responses:
+        '200': { description: Tenant runtime config, content: { application/json: { schema: { $ref: '#/components/schemas/ResolvedCall' } } } }
+        '404': { description: Number not assigned — play the generic fallback }
+components:
+  securitySchemes:
+    tenantToken: { type: http, scheme: bearer, bearerFormat: 'HS256 JWS, aud=tool-api, claims tid/prn/cid' }
+    engineSecret: { type: apiKey, in: header, name: X-1145-Engine-Secret }
+    cognito: { type: http, scheme: bearer, bearerFormat: JWT }
+    serviceIam: { type: apiKey, in: header, name: Authorization, description: SigV4 }
+  parameters:
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+    BookingId: { name: bookingId, in: path, required: true, schema: { type: string } }
+    StepUpToken: { name: X-Step-Up-Token, in: header, required: false, schema: { type: string } }
+  schemas:
+    E164: { type: string, pattern: '^\+[1-9]\d{6,14}$' }
+    Error: { type: object, required: [code, message], properties: { code: { type: string }, message: { type: string }, sayToCaller: { type: string } } }
+    AvailabilityRequest:
+      type: object
+      required: [dateFrom, dateTo]
+      properties:
+        serviceId: { type: string }
+        dateFrom: { type: string, format: date-time }
+        dateTo: { type: string, format: date-time }
+        maxResults: { type: integer, maximum: 10, default: 5 }
+    AvailabilityResponse:
+      type: object
+      required: [slots, timezone]
+      properties:
+        timezone: { type: string }
+        slots: { type: array, items: { type: object, required: [start, end, spoken], properties: { start: { type: string, format: date-time }, end: { type: string, format: date-time }, spoken: { type: string, description: 'e.g. "Tuesday at 3 pm"' } } } }
+    CreateBookingRequest:
+      type: object
+      required: [slotStart, serviceId, customer]
+      properties:
+        slotStart: { type: string, format: date-time }
+        serviceId: { type: string }
+        notes: { type: string, maxLength: 500 }
+        customer:
+          type: object
+          required: [name]
+          properties:
+            name: { type: string, maxLength: 120 }
+            email: { type: string, format: email }
+            phone: { type: string, description: 'Defaults to caller number from token context' }
+    Booking:
+      type: object
+      required: [bookingId, start, end, serviceId, status]
+      properties:
+        bookingId: { type: string }
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        serviceId: { type: string }
+        status: { type: string, enum: [confirmed, cancelled] }
+        customerFirstName: { type: string }
+    TakeMessageRequest:
+      type: object
+      required: [fromName, body]
+      properties:
+        fromName: { type: string, maxLength: 120 }
+        callbackNumber: { type: string }
+        body: { type: string, maxLength: 2000 }
+        urgency: { type: string, enum: [normal, urgent], default: normal }
+    KbSearchResponse:
+      type: object
+      properties:
+        passages: { type: array, items: { type: object, required: [text, source, verified], properties: { text: { type: string }, source: { type: string }, verified: { type: boolean } } } }
+    CallerLookupResponse:
+      type: object
+      required: [known]
+      properties:
+        known: { type: boolean }
+        firstName: { type: string }
+        hasUpcomingBooking: { type: boolean }
+    HandoffResponse:
+      type: object
+      required: [action, sayToCaller]
+      properties:
+        action: { type: string, enum: [transfer, take_message] }
+        transferTo: { $ref: '#/components/schemas/E164' }
+        sayToCaller: { type: string }
+    BusinessHours:
+      type: object
+      required: [timezone, weekly]
+      properties:
+        timezone: { type: string, example: America/Chicago }
+        weekly: { type: array, items: { type: object, required: [day, open, close], properties: { day: { type: integer, minimum: 0, maximum: 6, description: '0 = Sunday' }, open: { type: string, pattern: '^\d{2}:\d{2}$' }, close: { type: string, pattern: '^\d{2}:\d{2}$' } } } }
+        closedDates: { type: array, items: { type: string, format: date } }
+    ServicePatch:
+      type: object
+      properties:
+        name: { type: string }
+        durationMin: { type: integer, minimum: 5, maximum: 480 }
+        priceCents: { type: integer, minimum: 0 }
+        active: { type: boolean }
+    ResolvedCall:
+      type: object
+      required: [tenantId, token, state, agent]
+      properties:
+        tenantId: { type: string }
+        token: { type: string, description: 'Call-scoped tenant token; never shown to the model' }
+        state: { type: string, enum: [active, suspended, over_cap] }
+        agent:
+          type: object
+          required: [agentName, businessName, timezone, disclosureLine, instructions, templateVersion]
+          properties:
+            agentName: { type: string }
+            businessName: { type: string }
+            timezone: { type: string }
+            disclosureLine: { type: string }
+            instructions: { type: string, description: 'Rendered from the pinned template + owner-confirmed profile' }
+            voiceId: { type: string }
+            language: { type: string, default: en-US }
+            templateVersion: { type: string }

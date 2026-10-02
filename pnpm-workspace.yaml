@@ -1,0 +1,6 @@
+packages:
+  - packages/*
+  - services/*
+  - engines/livekit-adapter
+  - engines/elevenlabs-adapter
+  - infra/cdk

@@ -1,0 +1,6 @@
+agent: customer
+channel: webchat
+tenant_fixture: barber-frisco-unverified-price
+turns:
+  - caller: "How much is a beard trim?"
+    expect: { reply_not_contains: ["$"], reply_contains_any: ["message", "check with the team"] }

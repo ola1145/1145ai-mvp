@@ -1,0 +1,8 @@
+{
+  "name": "@1145/infra",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": { "synth": "cdk synth", "diff": "cdk diff" },
+  "dependencies": { "aws-cdk-lib": "^2.200.0", "constructs": "^10.4.0" },
+  "devDependencies": { "aws-cdk": "^2.1000.0", "tsx": "^4.19.0" }
+}

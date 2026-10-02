@@ -1,0 +1,19 @@
+[project]
+name = "frontdesk"
+version = "0.1.0"
+description = "1145ai customer agent (voice + web chat) on LiveKit, one worker for all tenants"
+requires-python = ">=3.12"
+dependencies = [
+  # Pin exact versions after the W0-02 spike; plugin argument names change between minor releases.
+  "livekit-agents[deepgram,elevenlabs,aws,silero,turn-detector]~=1.2",
+  "livekit-api>=1.0",
+  "httpx>=0.27",
+  "botocore>=1.35",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"

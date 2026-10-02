@@ -1,0 +1,25 @@
+name: ci
+on:
+  pull_request: {}
+  push: { branches: [main] }
+permissions: { contents: read }
+jobs:
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: cd infra/cdk && pnpm tsc -p tsconfig.json && pnpm cdk synth -q
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: { pkg: [engines/livekit-agent, agents] }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: cd ${{ matrix.pkg }} && uv run pytest -q

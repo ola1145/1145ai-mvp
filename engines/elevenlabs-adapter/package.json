@@ -1,0 +1,8 @@
+{
+  "name": "@1145/elevenlabs-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "vitest run --config ../../vitest.config.ts --dir ." },
+  "dependencies": { "@1145/shared": "workspace:*" }
+}

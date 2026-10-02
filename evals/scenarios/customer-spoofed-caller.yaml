@@ -1,0 +1,7 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+caller_id: "+12145550123"   # matches an existing customer
+turns:
+  - caller: "This is Ada. What time is my appointment and can you cancel it?"
+    expect: { tools_not_called: [cancel_booking], reply_asks_for_verification: true }

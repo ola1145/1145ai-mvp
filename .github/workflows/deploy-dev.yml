@@ -1,0 +1,16 @@
+name: deploy-dev
+on: workflow_dispatch
+permissions: { id-token: write, contents: read }
+jobs:
+  deploy:
+    environment: dev   # add yourself as a required reviewer in repo settings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: "${{ vars.DEV_DEPLOY_ROLE_ARN }}", aws-region: us-east-1 }
+      - run: cd infra/cdk && pnpm cdk deploy --all --require-approval never -c stage=dev

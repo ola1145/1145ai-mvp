@@ -1,0 +1,10 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+turns:
+  - caller: "Hi, can I get a haircut tomorrow afternoon?"
+    expect: { tools_called: [check_availability], reply_max_chars: 220 }
+  - caller: "3 works. It's Tunde."
+    expect: { tools_called: [book_appointment], reply_contains_any: ["booked", "see you"] }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

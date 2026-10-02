@@ -1,0 +1,11 @@
+node_modules/
+dist/
+cdk.out/
+.lane-logs/
+.env
+.env.*
+!.env.example
+__pycache__/
+.venv/
+.pytest_cache/
+*.log

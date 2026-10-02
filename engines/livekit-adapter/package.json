@@ -1,0 +1,7 @@
+{
+  "name": "@1145/livekit-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@1145/shared": "workspace:*", "livekit-server-sdk": "^2.9.0" }
+}

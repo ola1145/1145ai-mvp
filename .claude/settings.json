@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm:*)", "Bash(npx vitest:*)", "Bash(npx tsc:*)", "Bash(uv:*)",
+      "Bash(make test:*)", "Bash(make typecheck:*)", "Bash(make synth:*)",
+      "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git add:*)", "Bash(git commit:*)", "Bash(git worktree list:*)"
+    ],
+    "deny": [
+      "Bash(cdk deploy:*)", "Bash(npx cdk deploy:*)", "Bash(pnpm cdk deploy:*)",
+      "Bash(aws:*)", "Bash(git push:*)", "Bash(curl:*)",
+      "Read(./.env)", "Read(./.env.*)"
+    ]
+  }
+}

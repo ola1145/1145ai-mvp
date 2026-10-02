@@ -1,0 +1,5 @@
+agent: onboarding
+channel: whatsapp
+turns:
+  - owner: "Smile Dental in Plano, we're a dentist"
+    expect: { reply_contains_any: ["not supported yet", "waitlist"], tools_not_called: [send_signup_link] }

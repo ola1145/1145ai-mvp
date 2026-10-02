@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1145.ai/contracts/events.schema.json",
+  "title": "1145ai EventBridge events (bus: 1145)",
+  "description": "Every event has the envelope below in EventBridge `detail`. `source` = 1145.<service>. detail-type = the `type` value.",
+  "type": "object",
+  "required": ["type", "version", "tenantId", "correlationId", "occurredAt", "data"],
+  "properties": {
+    "type": {
+      "enum": [
+        "call.started", "call.ended", "booking.created", "booking.updated", "booking.cancelled",
+        "message.taken", "handoff.requested", "conversation.message",
+        "onboarding.status", "tenant.provisioned", "tenant.state_changed",
+        "channel.unlock_changed", "usage.recorded", "admin.change_applied"
+      ]
+    },
+    "version": { "const": 1 },
+    "tenantId": { "type": "string" },
+    "correlationId": { "type": "string", "description": "Carrier call id, room name, or conversation id; same across every event of one interaction" },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "data": { "type": "object" }
+  },
+  "$defs": {
+    "call.started": { "type": "object", "required": ["callId", "engine", "channel", "callerMasked"], "properties": { "callId": {"type": "string"}, "engine": {"enum": ["livekit-telnyx", "elevenlabs"]}, "channel": {"enum": ["voice", "webchat"]}, "callerMasked": {"type": "string"} } },
+    "call.ended": { "type": "object", "required": ["callId", "durationSec", "endReason"], "properties": { "callId": {"type": "string"}, "durationSec": {"type": "integer"}, "endReason": {"enum": ["caller_hangup", "agent_hangup", "transfer", "error", "over_cap", "suspended"]}, "transcriptKey": {"type": "string"}, "engineConversationId": {"type": "string"} } },
+    "booking.created": { "type": "object", "required": ["bookingId", "start", "serviceId", "via"], "properties": { "bookingId": {"type": "string"}, "start": {"type": "string"}, "serviceId": {"type": "string"}, "via": {"enum": ["voice", "webchat", "whatsapp", "telegram", "sms", "dashboard", "admin-agent"]} } },
+    "onboarding.status": { "type": "object", "required": ["step", "state"], "properties": { "step": {"enum": ["number", "knowledge", "profile", "agent_name", "smoke_call", "activate"]}, "state": {"enum": ["started", "waiting_owner", "done", "failed"]}, "messageForOwner": {"type": "string"} } },
+    "usage.recorded": { "type": "object", "required": ["callId", "billableSeconds", "engine"], "properties": { "callId": {"type": "string"}, "billableSeconds": {"type": "integer"}, "engine": {"type": "string"} } }
+  }
+}
