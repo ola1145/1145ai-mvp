@@ -17,6 +17,9 @@ class ToolsClient:
         self._call_id = call_id
         self._timeout = timeout_s
 
+    def __repr__(self) -> str:
+        return f"ToolsClient(base={self._base!r}, call_id={self._call_id!r})"   # never the token
+
     async def _post(self, path: str, body: dict[str, Any], extra_headers: dict[str, str] | None = None) -> dict[str, Any]:
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as c:
@@ -25,7 +28,7 @@ class ToolsClient:
             if r.status_code >= 400:
                 return {"error": data.get("code", "error"), "sayToCaller": data.get("sayToCaller", FALLBACK)}
             return data
-        except (httpx.HTTPError, ValueError):
+        except (httpx.HTTPError, ValueError, AttributeError):
             return {"error": "unavailable", "sayToCaller": FALLBACK}
 
     async def check_availability(self, date_from: str, date_to: str, service_id: str | None) -> dict[str, Any]:
