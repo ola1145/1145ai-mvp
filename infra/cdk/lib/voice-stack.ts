@@ -13,6 +13,15 @@ interface Props extends StackProps { data: DataStack; events: EventsStack; toolA
 
 /** frontdesk worker on ECS Fargate. It dials OUT to LiveKit, so there is no load balancer and no inbound port. */
 export class VoiceStack extends Stack {
+  /**
+   * The Vpc construct reads `stack.availabilityZones`, which for an account/region-bound stack is an AWS lookup at synth
+   * time (it fails in CI, where there are no credentials, and only passes locally from a cached cdk.context.json). Pin
+   * the two zones instead; `a` and `b` exist in every region we deploy to.
+   */
+  override get availabilityZones(): string[] {
+    return [`${this.region}a`, `${this.region}b`];
+  }
+
   constructor(scope: Construct, id: string, props: Props) {
     super(scope, id, props);
     const vpc = new ec2.Vpc(this, 'Vpc', { maxAzs: 2, natGateways: 1 });
