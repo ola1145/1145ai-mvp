@@ -50,7 +50,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm cdk synth -q
         working-directory: infra/cdk
-        env: { CDK_DEFAULT_ACCOUNT: "111111111111", CDK_DEFAULT_REGION: us-east-1 }
+        env: { CDK_DEFAULT_ACCOUNT: "298713973957", CDK_DEFAULT_REGION: us-east-1 }
 
   ownership:
     runs-on: ubuntu-latest
