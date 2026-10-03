@@ -1,4 +1,6 @@
 name: e2e
+# Called by deploy.yml after the dev deploy (prod needs this job, so a broken flow stops the promotion), nightly,
+# and by hand. The harness has no npm dependencies: node:test plus Node 22 type stripping (see tests/e2e/harness).
 on:
   workflow_call: {}
   workflow_dispatch: {}
@@ -10,16 +12,26 @@ permissions:
 jobs:
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - name: Run end-to-end gate (P8 builds tests/e2e)
-        working-directory: tests/e2e
+
+      # Harness self-tests: the Gate scenario against the in-memory fake, including every way it must fail.
+      # Never touches the network. A red here means the harness itself is broken.
+      - name: Harness and Gate scenario against fakes
+        run: node --experimental-strip-types --test "tests/e2e/harness/**/*.test.ts" "tests/e2e/scenarios/**/*.test.ts"
+
+      # The real Gate against the deployed dev stack. Fails the job (and so the prod promotion) on any broken step or
+      # any robotic agent turn. Until the live adapters are wired (tests/e2e/harness/live.ts) it prints exactly what is
+      # missing and exits 0; set the repository variable E2E_REQUIRE_LIVE=true to make "not runnable" a failure too.
+      - name: Gate against dev
         env:
           E2E_STAGE: dev
+          E2E_API_BASE: ${{ vars.E2E_API_BASE }}
+          E2E_OWNER_TOKEN: ${{ secrets.E2E_OWNER_TOKEN }}
+          E2E_REQUIRE_LIVE: ${{ vars.E2E_REQUIRE_LIVE }}
           TELNYX_API_KEY: ${{ secrets.TELNYX_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        run: |
-          if [ ! -f package.json ]; then echo "tests/e2e not built yet (P8)"; exit 0; fi
-          npm ci && npm test
+        run: node --experimental-strip-types tests/e2e/harness/run-live.ts
