@@ -10,6 +10,7 @@ Checks behind the required status checks. Each prints one actionable line per fa
 | `main-green.sh` | main-green | latest success/failure run of ci on main; cancelled runs are ignored; `fix-main` PRs are exempt |
 | `route-agent.sh` | ci-failure-router | `devin/*` -> Devin, `cursor/*` -> @cursor, `claude/*` -> @claude; author login is the fallback |
 | `sanitize-log.sh` | ci-failure-router | defuses `@mentions` in quoted logs |
+| `review-verdict.sh` | claude-review | verdict = first line of the latest `claude[bot]` comment from this run: `Merge gate: APPROVE` or `Merge gate: BLOCK: ...`; no comment fails closed |
 | `dep-batch.ts` | none | `pnpm exec tsx scripts/ci/dep-batch.ts` prints today's dependency requests for P3's single lockfile PR |
 
 ## Asking P3 for a dependency

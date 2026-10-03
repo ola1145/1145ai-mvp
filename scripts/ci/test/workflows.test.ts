@@ -58,6 +58,14 @@ describe('agent-facing workflows are safe on a public repo', () => {
     expect(t.indexOf('rm -f review-verdict.txt')).toBeGreaterThan(-1);
     expect(t.indexOf('rm -f review-verdict.txt')).toBeLessThan(t.indexOf('claude-code-action'));
   });
+  it('claude-review reads the verdict from the reviewer comment, not from a file the model must write', () => {
+    const t = read('.github/workflows/claude-review.yml');
+    expect(t).toContain('scripts/ci/review-verdict.sh');
+    expect(t).toContain('REVIEW_START');
+    expect(t).toContain('Merge gate: APPROVE');
+    expect(t, 'a redirect in allowedTools never matches, which is how the gate failed with "no verdict written"').not.toMatch(/allowedTools[^\n]*echo/);
+    expect(t).not.toMatch(/test -f review-verdict\.txt/);
+  });
   it('claude-review blocks only on checklist violations', () => {
     const t = read('.github/workflows/claude-review.yml');
     expect(t).toMatch(/BLOCK only for a concrete violation/);

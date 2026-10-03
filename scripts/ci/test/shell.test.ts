@@ -46,6 +46,42 @@ describe('sanitize-log.sh: code fences', () => {
   });
 });
 
+describe('review-verdict.sh: verdict comes from the reviewer comment', () => {
+  const START = '2026-10-03T03:24:00Z';
+  const c = (login: string, body: string, updated_at = '2026-10-03T03:24:23Z') => ({ user: { login }, body, updated_at });
+  const verdict = (comments: unknown[][], env: Record<string, string> = {}) => {
+    const r = run('review-verdict.sh', [], { START, ...env }, comments.map((p) => JSON.stringify(p)).join('\n'));
+    return { code: r.status, out: r.stdout };
+  };
+  it('approves on the real comment shape from PR #1 (bold, with a trailing note)', () => {
+    expect(verdict([[c('claude[bot]', "**Merge gate: APPROVE** (I couldn't run the tests here)\n\nDetails")]]).code).toBe(0);
+    expect(verdict([[c('claude[bot]', 'Merge gate: APPROVE')]]).code).toBe(0);
+  });
+  it('blocks and repeats the reason line', () => {
+    const r = verdict([[c('claude[bot]', 'Merge gate: BLOCK: 1 services/x/a.ts:12 add the tenant key condition\nmore')]]);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('services/x/a.ts:12');
+  });
+  it('fails closed with no comment, a malformed first line, or a verdict only in the body', () => {
+    expect(verdict([[]]).code).toBe(1);
+    expect(verdict([[c('claude[bot]', 'Looks fine to me')]]).code).toBe(1);
+    expect(verdict([[c('claude[bot]', 'Summary\nMerge gate: APPROVE')]]).code).toBe(1);
+  });
+  it('ignores comments from anyone but the reviewer', () => {
+    const r = verdict([[c('some-user', 'Merge gate: APPROVE'), c('github-actions[bot]', 'Merge gate: APPROVE')]]);
+    expect(r.code).toBe(1);
+  });
+  it('ignores a stale verdict from before this run', () => {
+    expect(verdict([[c('claude[bot]', 'Merge gate: APPROVE', '2026-10-03T02:00:00Z')]]).code).toBe(1);
+  });
+  it('uses the latest verdict when the reviewer commented more than once, across pages', () => {
+    const early = c('claude[bot]', 'Merge gate: BLOCK: 1 a.ts:1 fix', '2026-10-03T03:24:10Z');
+    const late = c('claude[bot]', 'Merge gate: APPROVE', '2026-10-03T03:24:50Z');
+    expect(verdict([[early], [late]]).code).toBe(0);
+    expect(verdict([[late], [{ ...early, updated_at: '2026-10-03T03:24:59Z' }]]).code).toBe(1);
+  });
+});
+
 describe('main-green.sh: merge freeze', () => {
   // The script asks gh for completed runs with a --jq filter that prints one conclusion per line; the fake prints that shape.
   const fakeGh = (conclusions: string[]) => {
@@ -116,7 +152,7 @@ describe('check-ownership.ts end to end', () => {
 });
 
 describe('shell scripts parse', () => {
-  it.each(['route-agent.sh', 'sanitize-log.sh', 'main-green.sh'])('%s', (s) => {
+  it.each(['route-agent.sh', 'sanitize-log.sh', 'main-green.sh', 'review-verdict.sh'])('%s', (s) => {
     expect(() => execFileSync('bash', ['-n', join(ci, s)])).not.toThrow();
   });
 });

@@ -18,8 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
-      # A PR could commit its own review-verdict.txt saying APPROVE. Only the reviewer's verdict counts.
+      # A PR could commit its own review-verdict.txt saying APPROVE. Only the reviewer's comment counts.
       - run: rm -f review-verdict.txt
+      - run: echo "REVIEW_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -50,17 +51,20 @@ jobs:
             Do NOT block for naming, formatting, structure, missing docs, performance, refactor ideas, test style, or
             anything you would phrase as "consider" or "nit". Put those in comments and still APPROVE.
 
-            When you BLOCK, the first line of your summary comment must read exactly
-            `BLOCK: <rule number> <file>:<line> <the change that fixes it>` so the author agent can act on it in one step.
             Post one summary with `gh pr comment` and inline comments with
             mcp__github_inline_comment__create_inline_comment (confirmed: true) for specific lines.
-            Your last action must be exactly one of these commands:
-              echo APPROVE > review-verdict.txt
-              echo BLOCK > review-verdict.txt
+            The first line of the summary comment is the verdict and must read exactly one of:
+              Merge gate: APPROVE
+              Merge gate: BLOCK: <rule number> <file>:<line> <the change that fixes it>
+            so the author agent can act on a BLOCK in one step. Do not write any file.
           claude_args: |
             --max-turns 30
-            --allowedTools "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(echo APPROVE > review-verdict.txt),Bash(echo BLOCK > review-verdict.txt)"
+            --allowedTools "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
       - name: Gate on verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          test -f review-verdict.txt || { echo "no verdict written"; exit 1; }
-          grep -qx "APPROVE" review-verdict.txt || { echo "claude-review: BLOCK. The first line of the review comment names the rule and the line to fix."; exit 1; }
+          gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
+            | START="$REVIEW_START" bash scripts/ci/review-verdict.sh
