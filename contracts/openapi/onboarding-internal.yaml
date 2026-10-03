@@ -1,25 +1,27 @@
 openapi: 3.1.0
 info:
   title: 1145ai Onboarding internal API
-  version: 0.1.0
+  version: 0.2.0
   description: |
     Called only by the onboarding agent runtime (service token) and the signup web app. {onboardingId} in the path is
     bound by the router from the verified channel identity; the agent's tools never take it as an argument.
+    Conventions (x-handler, examples, additive-only changes) are in contracts/README.md.
 security: [ { serviceToken: [] } ]
 paths:
-  /internal/onboarding/{onboardingId}/basics:      { post: { operationId: saveBasics, summary: 'name, type, area, website' } }
-  /internal/onboarding/{onboardingId}/waitlist:    { post: { operationId: waitlist, summary: 'unsupported vertical (healthcare) or region' } }
-  /internal/onboarding/{onboardingId}/signup-link: { post: { operationId: sendSignupLink, summary: 'mint single-use token, send link in-channel; the agent never sees it' } }
+  /internal/onboarding/{onboardingId}/basics:      { post: { operationId: saveBasics, x-handler: services/provisioning/src/api/basics.ts, summary: 'name, type, area, website' } }
+  /internal/onboarding/{onboardingId}/waitlist:    { post: { operationId: waitlist, x-handler: services/provisioning/src/api/waitlist.ts, summary: 'unsupported vertical (healthcare) or region' } }
+  /internal/onboarding/{onboardingId}/signup-link: { post: { operationId: sendSignupLink, x-handler: services/provisioning/src/api/signup-link.ts, summary: 'mint single-use token, send link in-channel; the agent never sees it' } }
   /internal/onboarding/{onboardingId}/provisioning:
-    post: { operationId: startProvisioning, summary: 'StartExecution with name = onboardingId (idempotent); 409 identity_not_confirmed until reverse confirmation' }
-    get:  { operationId: provisioningStatus, summary: 'per-branch status for chat + dashboard' }
-  /internal/onboarding/{onboardingId}/hours:       { post: { operationId: saveHours, summary: 'free text -> parsed BusinessHours (LLM parse, schema-validated), returned for read-back' } }
-  /internal/onboarding/{onboardingId}/services:    { post: { operationId: saveServices, summary: 'free text -> parsed services' } }
-  /internal/onboarding/{onboardingId}/facts:       { get: { operationId: listFacts, summary: 'scraped candidates with flags' } }
-  /internal/onboarding/{onboardingId}/facts/decisions: { post: { operationId: decideFacts, summary: 'approved -> verified=true; completes the facts task token' } }
-  /internal/onboarding/{onboardingId}/agent-name:  { post: { operationId: nameAgent, summary: 'completes the agent_name task token' } }
+    post: { operationId: startProvisioning, x-handler: services/provisioning/src/api/provisioning.ts, summary: 'StartExecution with name = onboardingId (idempotent); 409 identity_not_confirmed until reverse confirmation' }
+    get:  { operationId: provisioningStatus, x-handler: services/provisioning/src/api/provisioning.ts, summary: 'per-branch status for chat + dashboard' }
+  /internal/onboarding/{onboardingId}/hours:       { post: { operationId: saveHours, x-handler: services/provisioning/src/api/parse-profile.ts, summary: 'free text -> parsed BusinessHours (LLM parse, schema-validated), returned for read-back' } }
+  /internal/onboarding/{onboardingId}/services:    { post: { operationId: saveServices, x-handler: services/provisioning/src/api/parse-profile.ts, summary: 'free text -> parsed services' } }
+  /internal/onboarding/{onboardingId}/facts:       { get: { operationId: listFacts, x-handler: services/provisioning/src/api/facts.ts, summary: 'scraped candidates with flags' } }
+  /internal/onboarding/{onboardingId}/facts/decisions: { post: { operationId: decideFacts, x-handler: services/provisioning/src/api/facts.ts, summary: 'approved -> verified=true; completes the facts task token' } }
+  /internal/onboarding/{onboardingId}/agent-name:  { post: { operationId: nameAgent, x-handler: services/provisioning/src/api/agent-name.ts, summary: 'completes the agent_name task token' } }
+  /internal/onboarding/{onboardingId}/payment-setup: { post: { operationId: setupPayment, x-handler: services/provisioning/src/api/payment-setup.ts, summary: 'Added 0.2: Stripe (test mode in dev) SetupIntent for card-on-file before a number is bought; returns a hosted link the router sends in-channel' } }
   /signup/callback:
-    get: { operationId: signupCallback, security: [], summary: 'Cognito hosted UI redirect: consume token, create PENDING binding, send reverse-confirmation message in chat' }
+    get: { operationId: signupCallback, security: [], x-handler: services/provisioning/src/api/signup-callback.ts, summary: 'Cognito hosted UI redirect: consume token, create PENDING binding, send reverse-confirmation message in chat' }
 components:
   securitySchemes:
     serviceToken: { type: http, scheme: bearer }

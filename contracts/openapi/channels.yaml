@@ -1,12 +1,14 @@
 openapi: 3.1.0
 info:
   title: 1145ai channel endpoints (MVP, no third-party approvals)
-  version: 0.1.0
+  version: 0.2.0
+  description: Conventions (x-handler, x-voice-path, examples, additive-only changes) are in contracts/README.md.
 paths:
   /v1/owner-chat/messages:
     post:
       operationId: postOwnerChatMessage
       security: [ { cognito: [] } ]
+      x-handler: services/channels/src/owner-chat.ts
       description: Owner web chat (onboarding before a tenant exists, copilot after). Enqueued to the FIFO router; the reply arrives on AppSync Events /owners/<sub>/chat.
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [text, clientMessageId], properties: { text: { type: string, maxLength: 4000 }, clientMessageId: { type: string, maxLength: 64 }, referralCode: { type: string, pattern: '^[A-Za-z0-9_-]{4,64}$' } } } } } }
       responses: { '202': { description: Accepted } }
@@ -14,28 +16,81 @@ paths:
     post:
       operationId: createCustomerWebchatToken
       security: []
-      description: Public. Widget key (published on the tenant's site) -> short-lived LiveKit token for a text-only room. Rate limited per IP and per widget key. The tenant is resolved server-side; the client never sends a tenant id.
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [widgetKey], properties: { widgetKey: { type: string, pattern: '^wk_[A-Za-z0-9]{16,40}$' } } } } } }
-      responses: { '200': { description: '{ url, token, roomName, agentName, greeting }' }, '404': { description: Unknown widget } }
+      x-handler: services/channels/src/customer-webchat-token.ts
+      description: |
+        Public. Widget key (published on the tenant's site) -> short-lived LiveKit token for a text-only room. Rate limited
+        per IP and per widget key. The tenant is resolved server-side; the client never sends a tenant id.
+        Room rules (CR E5-1): the room is created server-side with metadata {"widgetKey": "<key>"} before the token is
+        minted; the visitor token must not grant canUpdateMetadata or canUpdateOwnMetadata; agent dispatch uses the
+        LiveKit agent name "frontdesk"; the room name chat-<tid>-<uuid> is informational only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [widgetKey], properties: { widgetKey: { type: string, pattern: '^wk_[A-Za-z0-9]{16,40}$' } } }
+            examples:
+              widget: { value: { widgetKey: wk_8fJ2kQ9xLm4TzR7a } }
+      responses:
+        '200':
+          description: '{ url, token, roomName, agentName, greeting }'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebchatToken' }
+              examples:
+                ok: { value: { url: 'wss://livekit.example.invalid', token: '<short-lived LiveKit token>', roomName: chat-t_tenanta01-5b0c9e1a-7d2f-4c61-9a0e-3f4b8c2d1e77, agentName: Ava, greeting: "Hi, I'm Ava, the AI assistant at Kemi Cuts. What can I help with?" } }
+        '404': { description: Unknown widget }
   /r/{code}:
     get:
       operationId: referralRedirect
       security: []
+      x-handler: services/channels/src/referral-redirect.ts
       parameters: [ { name: code, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{4,64}$' } } ]
       responses: { '302': { description: 'Redirect to https://app.1145.ai/start?ref=<code>; click recorded as REFCLICK#<code>' } }
   /telegram:
     post:
       operationId: telegramWebhook
       security: [ { telegramSecret: [] } ]
+      x-handler: services/channels/src/telegram-webhook.ts
       responses: { '200': { description: Enqueued or ignored } }
   /internal/resolve/widget:
     post:
       operationId: resolveWidget
       security: [ { serviceIam: [] } ]
-      description: Voice worker resolves a chat room's widget key to tenant runtime config and a call-scoped token (same shape as /internal/resolve/number).
-      responses: { '200': { description: ResolvedCall }, '404': { description: Unknown widget } }
+      x-handler: services/tool-api/src/handlers/internal-resolve-widget.ts
+      x-voice-path: true
+      description: |
+        Voice worker resolves a chat room's widget key to tenant runtime config and a call-scoped token (same shape as
+        /internal/resolve/number). The worker reads widgetKey only from the room metadata set server-side by
+        createCustomerWebchatToken, never from the visitor or the room name. callId is the room name; the token is minted
+        with ch=webchat and cid=callId. (CR E5-1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [widgetKey, callId], properties: { widgetKey: { type: string, pattern: '^wk_[A-Za-z0-9]{16,40}$' }, callId: { type: string, maxLength: 128, description: The LiveKit room name } } }
+            examples:
+              room: { value: { widgetKey: wk_8fJ2kQ9xLm4TzR7a, callId: chat-t_tenanta01-5b0c9e1a-7d2f-4c61-9a0e-3f4b8c2d1e77 } }
+      responses:
+        '200':
+          description: ResolvedCall
+          content:
+            application/json:
+              schema: { $ref: 'tenant-tools.yaml#/components/schemas/ResolvedCall' }
+              examples:
+                active: { $ref: 'tenant-tools.yaml#/components/examples/ResolvedCallActive' }
+        '404': { description: Unknown or disabled widget }
 components:
   securitySchemes:
     cognito: { type: http, scheme: bearer, bearerFormat: JWT }
     telegramSecret: { type: apiKey, in: header, name: X-Telegram-Bot-Api-Secret-Token }
     serviceIam: { type: apiKey, in: header, name: Authorization, description: SigV4 }
+  schemas:
+    WebchatToken:
+      type: object
+      required: [url, token, roomName, agentName, greeting]
+      properties:
+        url: { type: string, description: LiveKit server URL }
+        token: { type: string, description: Short-lived LiveKit access token for one text-only room }
+        roomName: { type: string }
+        agentName: { type: string, description: 'Display name for the widget header (e.g. Ava), not the LiveKit dispatch name' }
+        greeting: { type: string, description: First message shown in the widget (follows 1145-conversation-style) }
