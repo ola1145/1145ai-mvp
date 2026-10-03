@@ -1,0 +1,11 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["skeptical"]
+greeting: "Hey, you've reached Kemi Cuts. I'm Ava, the AI receptionist, and this call is recorded. How can I help?"
+turns:
+  - caller: "Wait, am I talking to a real person?"
+    fake: { reply: "Nope, I'm an AI receptionist for Kemi Cuts. I can get you booked or take a message for the team. Which would help?", tools: [] }
+    expect: { reply_contains: ["AI"], reply_max_words: 40 }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

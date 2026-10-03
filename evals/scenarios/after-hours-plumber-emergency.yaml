@@ -1,0 +1,11 @@
+agent: customer
+channel: voice
+tenant_fixture: plumber-allen-after-hours
+tags: ["after-hours", "emergency"]
+greeting: "Hi, Allen Plumbing, this is Sam. I'm the AI receptionist and this call is recorded. We're closed for the night, but I can still help. What's going on?"
+turns:
+  - caller: "My pipe burst and water is everywhere!"
+    fake: { reply: "Oh no. Shut off the main valve if you can. I'm getting the on-call plumber now. What's your address?", tools: ["request_handoff"] }
+    expect: { tools_called: ["request_handoff"], reply_contains_any: ["valve", "on-call"], reply_max_words: 35 }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

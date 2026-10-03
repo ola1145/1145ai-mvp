@@ -1,0 +1,8 @@
+agent: admin
+channel: telegram
+tenant_fixture: barber-frisco
+tags: ["admin", "confirm"]
+turns:
+  - owner: "Close early Friday, 3pm."
+    fake: { reply: "Got it, closing at three this Friday. Reply CONFIRM and I'll update it.", tools: ["propose_hours_change"] }
+    expect: { tools_called: ["propose_hours_change"], tools_not_called: ["apply_change"], reply_contains: ["CONFIRM"] }

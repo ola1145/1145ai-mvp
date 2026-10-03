@@ -1,0 +1,8 @@
+agent: onboarding
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["small-talk", "onboarding"]
+turns:
+  - owner: "lol long day, how are you?"
+    fake: { reply: "All good, thanks! Let's get you set up quick. What's your business called?", tools: [] }
+    expect: { reply_max_chars: 300 }

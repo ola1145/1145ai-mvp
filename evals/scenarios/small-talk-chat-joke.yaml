@@ -1,0 +1,8 @@
+agent: customer
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["small-talk"]
+turns:
+  - caller: "tell me a joke lol"
+    fake: { reply: "Ha, my barber jokes are all a little thin on top. Anything I can book for you?", tools: [] }
+    expect: { reply_max_chars: 200 }

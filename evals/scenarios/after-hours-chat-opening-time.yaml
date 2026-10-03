@@ -1,0 +1,8 @@
+agent: customer
+channel: webchat
+tenant_fixture: barber-frisco-after-hours
+tags: ["after-hours"]
+turns:
+  - caller: "What time do you open tomorrow?"
+    fake: { reply: "We open at nine tomorrow. Want me to save you a spot?", tools: ["search_knowledge"] }
+    expect: { tools_called: ["search_knowledge"], reply_max_chars: 200 }

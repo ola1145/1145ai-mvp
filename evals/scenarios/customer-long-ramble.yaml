@@ -1,0 +1,11 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["message"]
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
+turns:
+  - caller: "So I was in last month and Dayo cut my hair, really nice guy, and then my cousin said I should tell the owner about the thing with the parking, you know, around the back."
+    fake: { reply: "Got it. I'll pass that on to the owner. What's a good number to reach you?", tools: ["take_message"] }
+    expect: { tools_called: ["take_message"], reply_max_words: 30 }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

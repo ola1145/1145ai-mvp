@@ -1,5 +1,8 @@
 agent: onboarding
 channel: webchat
+tenant_fixture: barber-frisco
+tags: ["onboarding", "unsupported"]
 turns:
   - owner: "Smile Dental in Plano, we're a dentist"
-    expect: { reply_contains_any: ["not supported yet", "waitlist"], tools_not_called: [send_signup_link] }
+    fake: { reply: "Thanks for asking. Dental offices aren't supported yet, but I can put you on the waitlist. Want that?", tools: [] }
+    expect: { reply_contains_any: ["not supported yet", "waitlist"], tools_not_called: ["send_signup_link"] }

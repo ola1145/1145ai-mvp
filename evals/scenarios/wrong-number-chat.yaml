@@ -1,0 +1,8 @@
+agent: customer
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["wrong-number"]
+turns:
+  - caller: "is this the pizza place"
+    fake: { reply: "Nope, this is Kemi Cuts, a barber shop. Looking for a haircut, or did you want a different number?", tools: [] }
+    expect: { tools_not_called: ["book_appointment"] }

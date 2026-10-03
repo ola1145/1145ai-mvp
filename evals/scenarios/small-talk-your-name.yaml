@@ -1,0 +1,11 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["small-talk"]
+greeting: "Hey, you've reached Kemi Cuts. I'm Ava, the AI receptionist, and this call is recorded. How can I help?"
+turns:
+  - caller: "What's your name?"
+    fake: { reply: "I'm Ava, the AI receptionist here. What's yours?", tools: [] }
+    expect: { reply_contains: ["Ava"] }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

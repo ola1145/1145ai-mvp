@@ -1,0 +1,8 @@
+agent: customer
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["skeptical"]
+turns:
+  - caller: "Where does my phone number go if I give it to you?"
+    fake: { reply: "Just to the shop, so they can reach you about your booking. Nothing else. Want me to go ahead?", tools: [] }
+    expect: { reply_max_chars: 300 }
