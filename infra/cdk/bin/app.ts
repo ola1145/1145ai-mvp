@@ -32,5 +32,11 @@ new NotificationsStack(app, p('notifications'), { env, data, events });
 new ControlPlaneStack(app, p('controlplane'), { env, data, events });
 new ObservabilityStack(app, p('observability'), { env });
 
+// One-time, by hand, once per AWS account (see bin/BOOTSTRAP.md). Never part of the CI deploy (no -c repo there).
+//   cdk deploy ai1145-github-oidc -c repo=<owner>/<repo> -c environments=dev [-c oidcProviderArn=<arn>]
 const repo = app.node.tryGetContext('repo');
-if (repo) new GithubOidcStack(app, 'ai1145-github-oidc', { env, repo, environments: ['dev', 'prod'] });
+if (repo) {
+  const environments = String(app.node.tryGetContext('environments') ?? 'dev,prod').split(',').map((e) => e.trim()).filter(Boolean);
+  const existingProviderArn: string | undefined = app.node.tryGetContext('oidcProviderArn');
+  new GithubOidcStack(app, 'ai1145-github-oidc', { env, repo, environments, existingProviderArn });
+}
