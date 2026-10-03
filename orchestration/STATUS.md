@@ -1,6 +1,6 @@
 # Floor status (maintained by the orchestrator)
 
-Last update: 2026-10-03 · Phase 0 in progress (cloud session, branch `claude/bold-mendel-btjun0`)
+Last update: 2026-10-03 · Phase 1 in progress; merging blocked by CI checks (see Blockers) (cloud session, branch `claude/bold-mendel-btjun0`)
 
 ## Phase 0 checklist
 
@@ -18,8 +18,20 @@ Last update: 2026-10-03 · Phase 0 in progress (cloud session, branch `claude/bo
 
 C0, P1–P8, T0–T4 (14 issues, not 16 as first reported) were in state Done, but GitHub has zero PRs and one branch. The P3 issue history shows a Cursor run on 2026-10-03 00:52 UTC walking it Backlog → Todo → In Progress → Done as an "MCP completion-status test". Those 14 were test artifacts, not delivered work, and the owner approved resetting them to Backlog; all 53 issues are now Backlog.
 
-## Floor
+## Floor (PRs on ola1145/1145ai-mvp)
 
-| Issue | Agent | State | PR | Checks | Blocker |
-|---|---|---|---|---|---|
-| all | — | Phase 1 not started | — | — | two repo secrets (`CLAUDE_CODE_OAUTH_TOKEN`, `AUTOMERGE_PAT`) so `verify.sh` passes |
+All 28 Claude-lane issues have a PR in review: G1 #1, T0 #2, D2 #3, T2 #4, P3 #5, E5 #6, A3 #7, E2 #8, C1 #9, E3 #10, A2 #11, A4 #12, A1 #13, D7 #14, E4 #15, P8 #16, P7 #17, P6 #19, Q1 #20, C0 #21 (contract-change), D5 #22, T7 #23, P2 #24, C6 #25, H2 #26, P5 #27, E1 #29 and the E1 synth fix #28 (fix-main). H3 #18 was opened by a Cursor agent. Q2 (threat model) is deliberately not a PR: see Blockers.
+
+| Agent | Issues | State |
+|---|---|---|
+| Claude (subagents) | 28 (14 original + 14 that replace Devin) | PRs open, none merged |
+| Devin | 0 | daily subscription exceeded; its 15 issues went to Claude |
+| Cursor/Grok | 22 | blocked: account not linked; H3 produced PR #18; other 21 in Backlog |
+| Human | E8, U1 | not started |
+
+## Blockers
+
+1. **Nothing can merge.** Required checks `cdk-synth` (main red: voice-stack AZ lookup; fix in #28), `main-green` (main red; `fix-main` label exempts the fix PR) and `claude-review` (claude-code-action refuses PRs that edit `claude-review.yml`, so P3's #5 needs a one-time admin merge). Ruleset has no bypass actors.
+2. **Q2 threat model** (branch `claude/1145-q2`, public) lists unfixed holes in a public repo: SEC-01 ownership checker can be changed by the PR it checks; SEC-02 claude workflows accept any bot and paste the PR title into the prompt. Owner to decide: delete branch, fix first, or go private.
+3. **Cursor monitor agent** in the owner account marks issues Done without work; stop it and link the account at https://cursor.com/linear.
+4. Merge-order hazards: A4 #12 tightens the shared style checker; E5 #6 changes livekit pins without refreshing uv.lock while P3 #5 enforces `uv run --locked`.
