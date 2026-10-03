@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isWithinHours, openSlots, slotInstants, spoken } from '../src/lib/slots.js';
+import { isOpenAt, isWithinHours, openSlots, slotInstants, spoken } from '../src/lib/slots.js';
 import { HOURS } from './fakes.js';
 
 // 2026-10-06 is a Tuesday. Chicago is UTC-5 (CDT) on that date, so 15:00 local = 20:00Z.
@@ -39,5 +39,17 @@ describe('open slots', () => {
     expect(spoken(TUE_3PM, 'America/Chicago', mon)).toBe('tomorrow at 3 PM');
     expect(spoken(new Date('2026-10-05T19:30:00Z'), 'America/Chicago', mon)).toBe('today at 2:30 PM');
     expect(spoken(new Date('2026-10-13T20:00:00Z'), 'America/Chicago', mon)).toBe('Tuesday, October 13 at 3 PM');
+  });
+});
+
+describe('isOpenAt', () => {
+  it('is open at open time and closed at close time (half-open window)', () => {
+    expect(isOpenAt(HOURS, new Date('2026-10-06T14:00:00Z'))).toBe(true); // 9:00 local
+    expect(isOpenAt(HOURS, new Date('2026-10-06T21:59:00Z'))).toBe(true); // 4:59 PM
+    expect(isOpenAt(HOURS, new Date('2026-10-06T22:00:00Z'))).toBe(false); // 5:00 PM
+  });
+  it('is closed on weekends and closed dates', () => {
+    expect(isOpenAt(HOURS, new Date('2026-10-04T20:00:00Z'))).toBe(false);
+    expect(isOpenAt({ ...HOURS, closedDates: ['2026-10-06'] }, TUE_3PM)).toBe(false);
   });
 });
