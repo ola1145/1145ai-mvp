@@ -1,6 +1,6 @@
 /**
  * Admin console API: tenant list, usage, suspend/resume, template pinning, transcript and export reads, export/delete.
- * Owner: issue H2 (tasks/H2.md). Endpoint reference: services/control-plane/README.md.
+ * Owner: issue H2 (tasks/H2.md). Endpoint reference: services/control-plane/src/console/README.md.
  * Routing and rules live in routes.ts; this file only wires AWS clients.
  */
 import { randomUUID } from 'node:crypto';
