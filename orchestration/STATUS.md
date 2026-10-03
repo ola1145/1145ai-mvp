@@ -1,26 +1,25 @@
 # Floor status (maintained by the orchestrator)
 
-Last update: 2026-10-02 · Phase 0 in progress
+Last update: 2026-10-03 · Phase 0 in progress (cloud session, branch `claude/bold-mendel-btjun0`)
 
 ## Phase 0 checklist
 
 | Step | State | Notes |
 |---|---|---|
-| 0.1 Toolchain | done | node v26.0.0 (repo targets 22), pnpm 9.12.0, uv 0.11.31, gh (ola1145), docker 29.6.1 installed but daemon not running, `.env` present |
-| 0.2 Baseline | green locally, not committed | `make test` 73 TS + 12 Py pass, `make typecheck` pass, `make synth` pass after adding `esbuild@0.28.2` to root devDependencies. Lockfiles created (pnpm-lock.yaml, two uv.lock). Not committed: local folder is not a git repo |
-| 0.3 MCP | blocked on approval | context7 and livekit-docs connect. linear, github, aws-knowledge, stripe are "Pending approval". github (empty `GITHUB_MCP_PAT`) and stripe (empty `STRIPE_MCP_TEST_KEY`) will fail auth until keys exist |
-| 0.4 Skills | partial | all nine `1145-*` skills are listed and load. Subagent trigger tests not run yet |
-| 0.5 Secrets | waiting | see "Secrets" below |
-| 0.6 GitHub | blocked | needs git repo plus `GH_ADMIN_TOKEN` |
-| 0.7 Linear | blocked | needs `LINEAR_API_KEY` |
+| 0.1 Toolchain | done | node v22.22.0, pnpm 9.12.0, uv 0.8.17, gh 2.89.0, docker 29.6.2 (daemon not running), make. `gh` token in this container is rejected (`GH_TOKEN` login failed); GitHub MCP works. No `.env` in this container (names only in `.env.example`). |
+| 0.2 Baseline | green | Lockfiles (`pnpm-lock.yaml`, `agents/uv.lock`, `engines/livekit-agent/uv.lock`) are already on `main`, so no `[1145:P3] lock dependencies` PR is needed. `pnpm install --frozen-lockfile`, `make test` (TS + 7 + 9 Python), `make typecheck`, `make synth` all pass. |
+| 0.3 MCP | partial | In this container the repo `.mcp.json` servers (linear, context7, livekit-docs) fail with a proxy 403, so they cannot be checked here. Claude.ai connectors answer: Linear (list teams/projects/users/issues) and GitHub (get repo, PRs, branches). `aws-knowledge` has a connector equivalent. Stripe MCP needs `STRIPE_MCP_TEST_KEY`; GitHub MCP in `.mcp.json` needs `GITHUB_MCP_PAT`. Nothing dropped yet; decide after a run on your machine. |
+| 0.4 Skills | partial | Nine `1145-*` skills load. Subagent trigger tests not run yet. |
+| 0.5 Secrets | waiting | `.env` is on the owner's machine, not here. Previous note: only `AWS_REGION`, `CURSOR_AGENT_MODEL`, `GITHUB_REPO_URL`, `LINEAR_TEAM_KEY`, `RESOLVER_MODE`, `STATIC_TENANT_JSON`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` were set. |
+| 0.6 GitHub | not verified | Repo `ola1145/1145ai-mvp` exists; only branch `main`; no PRs ever opened. `setup.sh` / `verify.sh` need `GH_ADMIN_TOKEN` and your go-ahead. |
+| 0.7 Linear | partly done, needs a decision | Project "1145ai MVP" exists with 53 issues, and the Devin and Cursor users exist in the workspace (integrations installed). **16 issues are marked Done with no work behind them** (see below). |
 
-## Secrets (names only)
+## Linear anomaly (needs owner decision)
 
-Set in `.env`: `AWS_REGION`, `CURSOR_AGENT_MODEL`, `GITHUB_REPO_URL`, `LINEAR_TEAM_KEY`, `RESOLVER_MODE`, `STATIC_TENANT_JSON`, one `LIVEKIT_API_KEY` and one `LIVEKIT_API_SECRET` line.
-Empty: every other variable in `docs/API_KEYS.md`. `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` also appear a second time as empty lines, which can override the set value depending on the loader.
+C0, P1–P8, T0–T4 are in state Done, but GitHub has zero PRs and one branch. The P3 issue history shows a Cursor run on 2026-10-03 00:52 UTC walking it Backlog → Todo → In Progress → Done as an "MCP completion-status test". Those 16 are test artifacts, not delivered work. The other 37 are in Backlog. Do not dispatch from Linear state until the 16 are reset to Backlog (or Todo).
 
 ## Floor
 
 | Issue | Agent | State | PR | Checks | Blocker |
 |---|---|---|---|---|---|
-| — | — | Phase 1 not started | — | — | Phase 0 gates above |
+| all | — | Phase 1 not started | — | — | Linear Done/Backlog reset, `GH_ADMIN_TOKEN`, secrets, GitHub setup confirmation |
