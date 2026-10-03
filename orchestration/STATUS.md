@@ -12,14 +12,14 @@ Last update: 2026-10-03 · Phase 0 in progress (cloud session, branch `claude/bo
 | 0.4 Skills | partial | Nine `1145-*` skills load. Subagent trigger tests not run yet. |
 | 0.5 Secrets | waiting | `.env` is on the owner's machine, not here. Previous note: only `AWS_REGION`, `CURSOR_AGENT_MODEL`, `GITHUB_REPO_URL`, `LINEAR_TEAM_KEY`, `RESOLVER_MODE`, `STATIC_TENANT_JSON`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` were set. |
 | 0.6 GitHub | not verified | Repo `ola1145/1145ai-mvp` exists; only branch `main`; no PRs ever opened. `setup.sh` / `verify.sh` need `GH_ADMIN_TOKEN` and your go-ahead. |
-| 0.7 Linear | partly done, needs a decision | Project "1145ai MVP" exists with 53 issues, and the Devin and Cursor users exist in the workspace (integrations installed). **16 issues are marked Done with no work behind them** (see below). |
+| 0.7 Linear | partly done, needs a decision | Project "1145ai MVP" exists with 53 issues, and the Devin and Cursor users exist in the workspace (integrations installed). **14 issues were marked Done with no work behind them (reset to Backlog on 2026-10-03)** (see below). |
 
 ## Linear anomaly (needs owner decision)
 
-C0, P1–P8, T0–T4 are in state Done, but GitHub has zero PRs and one branch. The P3 issue history shows a Cursor run on 2026-10-03 00:52 UTC walking it Backlog → Todo → In Progress → Done as an "MCP completion-status test". Those 16 are test artifacts, not delivered work. The other 37 are in Backlog. Do not dispatch from Linear state until the 16 are reset to Backlog (or Todo).
+C0, P1–P8, T0–T4 (14 issues, not 16 as first reported) were in state Done, but GitHub has zero PRs and one branch. The P3 issue history shows a Cursor run on 2026-10-03 00:52 UTC walking it Backlog → Todo → In Progress → Done as an "MCP completion-status test". Those 14 were test artifacts, not delivered work, and the owner approved resetting them to Backlog; all 53 issues are now Backlog.
 
 ## Floor
 
 | Issue | Agent | State | PR | Checks | Blocker |
 |---|---|---|---|---|---|
-| all | — | Phase 1 not started | — | — | Linear Done/Backlog reset, `GH_ADMIN_TOKEN`, secrets, GitHub setup confirmation |
+| all | — | Phase 1 not started | — | — | `GH_ADMIN_TOKEN` (owner will add it as an environment secret), secrets, GitHub setup confirmation |
