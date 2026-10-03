@@ -1,0 +1,9 @@
+{
+  "outbound_voice_profiles": [],
+  "fqdn_connections": [
+    { "id": "2000000000000000010", "record_type": "fqdn_connection", "connection_name": "1145-dev-livekit-inbound", "active": true },
+    { "id": "2000000000000000011", "record_type": "fqdn_connection", "connection_name": "1145-dev-livekit-inbound", "active": true }
+  ],
+  "fqdns": [],
+  "credential_connections": []
+}

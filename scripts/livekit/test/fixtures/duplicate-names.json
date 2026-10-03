@@ -1,0 +1,10 @@
+{
+  "inbound": {
+    "items": [
+      { "sipTrunkId": "ST_a", "name": "1145-dev-telnyx-inbound" },
+      { "sipTrunkId": "ST_b", "name": "1145-dev-telnyx-inbound" }
+    ]
+  },
+  "outbound": { "items": [] },
+  "dispatch": { "items": [] }
+}

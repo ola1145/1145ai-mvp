@@ -1,0 +1,31 @@
+{
+  "inbound": {
+    "items": [
+      { "sipTrunkId": "ST_fx_other", "name": "someone-elses-trunk", "numbers": ["+15550001111"] },
+      { "sipTrunkId": "ST_fx_in", "name": "1145-dev-telnyx-inbound" }
+    ]
+  },
+  "outbound": {
+    "items": [
+      {
+        "sipTrunkId": "ST_fx_out",
+        "name": "1145-dev-telnyx-outbound",
+        "address": "sip.telnyx.com",
+        "transport": "SIP_TRANSPORT_AUTO",
+        "numbers": ["*"],
+        "authUsername": "fixture-sip-user"
+      }
+    ]
+  },
+  "dispatch": {
+    "items": [
+      {
+        "sipDispatchRuleId": "SDR_fx_rule",
+        "name": "1145-dev-frontdesk",
+        "rule": { "dispatchRuleIndividual": { "roomPrefix": "call-" } },
+        "trunkIds": ["ST_fx_in"],
+        "roomConfig": { "agents": [{ "agentName": "frontdesk" }] }
+      }
+    ]
+  }
+}

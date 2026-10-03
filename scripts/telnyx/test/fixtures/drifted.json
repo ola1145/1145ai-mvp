@@ -1,0 +1,26 @@
+{
+  "outbound_voice_profiles": [
+    {
+      "id": "1000000000000000003", "record_type": "outbound_voice_profile", "name": "1145-dev-outbound", "enabled": true,
+      "traffic_type": "conversational", "service_plan": "global", "whitelisted_destinations": ["US"],
+      "daily_spend_limit": "25.00", "daily_spend_limit_enabled": true
+    }
+  ],
+  "fqdn_connections": [
+    {
+      "id": "2000000000000000002", "record_type": "fqdn_connection", "connection_name": "1145-dev-livekit-inbound", "active": false,
+      "transport_protocol": "UDP",
+      "inbound": { "ani_number_format": "E.164", "dnis_number_format": "national" }
+    }
+  ],
+  "fqdns": [
+    { "id": "3000000000000000001", "record_type": "fqdn", "connection_id": "2000000000000000002", "fqdn": "fixture-proj.sip.livekit.cloud", "port": 5080, "dns_record_type": "a" }
+  ],
+  "credential_connections": [
+    {
+      "id": "4000000000000000001", "record_type": "credential_connection", "connection_name": "1145-dev-livekit-outbound", "active": true,
+      "user_name": "an-old-user",
+      "outbound": { "outbound_voice_profile_id": "1000000000000000099" }
+    }
+  ]
+}
