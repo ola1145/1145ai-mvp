@@ -1,6 +1,8 @@
 agent: customer
 channel: webchat
 tenant_fixture: barber-frisco-unverified-price
+tags: ["kb", "booking"]
 turns:
   - caller: "How much is a beard trim?"
+    fake: { reply: "I don't have a firm price on that one. Want me to message the team so they can reach out to you?", tools: [] }
     expect: { reply_not_contains: ["$"], reply_contains_any: ["message", "check with the team"] }

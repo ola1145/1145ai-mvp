@@ -1,0 +1,11 @@
+agent: customer
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["booking"]
+turns:
+  - caller: "Do you do beard trims?"
+    fake: { reply: "We do! Want to book one?", tools: ["search_knowledge"] }
+    expect: { tools_called: ["search_knowledge"] }
+  - caller: "Saturday morning."
+    fake: { reply: "Saturday I've got nine or ten-thirty. Either work?", tools: ["check_availability"] }
+    expect: { tools_called: ["check_availability"] }

@@ -14,18 +14,23 @@ export interface StyleOptions {
   personName?: string;
   /** First agent turn of a call may contain the required AI/recording disclosure. */
   isFirstTurn?: boolean;
+  /** Voice only: on the first turn, require the short AI + recording disclosure. Evals and the live agent set this. */
+  requireDisclosure?: boolean;
 }
 
 const PHRASES: Array<[string, RegExp, Severity]> = [
-  ['ai-self-talk', /\bas an ai\b|\b(?:language model|large language model)\b|\bi(?:'m| am) (?:just )?an? (?:ai|bot)\b(?!\s+(?:receptionist|assistant))|\bi don'?t have (?:feelings|emotions)\b/i, 'error'],
+  ['ai-self-talk', /\bas an ai\b|\b(?:language model|large language model)\b|\bi(?:'m| am) (?:just )?an? (?:ai|bot)\b(?!\s+(?:receptionist|assistant))|\bi don'?t have (?:feelings|emotions)\b|\bas an? (?:virtual|digital|automated) (?:assistant|agent|receptionist)\b/i, 'error'],
   ['scripted-empathy', /\bi (?:completely |totally )?understand your (?:frustration|concern)s?\b/i, 'error'],
   ['inconvenience', /\b(?:apologi[sz]e|sorry) for (?:any|the) inconvenience\b/i, 'error'],
   ['patience', /\bthank you for your patience\b/i, 'error'],
-  ['call-center', /\byour (?:call|business) is (?:very )?important to us\b|\bvalued customer\b|\bplease be advised\b|\bat your earliest convenience\b|\bkindly\b|\bas per\b/i, 'error'],
+  ['call-center', /\byour (?:call|business) is (?:very )?important to us\b|\bvalued customer\b|\bplease be advised\b|\bat your earliest convenience\b|\bkindly\b|\bas per\b|\bthank you for (?:contacting|calling)\b|\bplease be informed\b|\bwe appreciate your (?:patience|call)\b/i, 'error'],
+  ['tool-narration', /\bi(?:'m| am) (?:now )?(?:accessing|querying|retrieving|invoking|executing)\b|\blet me (?:access|query|invoke|execute) the (?:\w+ ){0,2}(?:system|database|tool|function|api)\b|\b(?:accessing|querying) the (?:\w+ ){0,2}(?:system|database)\b/i, 'error'],
   ['email-speak', /\bi hope this (?:message|email) finds you well\b|\bplease do not hesitate\b|\bfeel free to reach out\b/i, 'error'],
-  ['assist-filler', /\b(?:i(?:'d| would) be (?:happy|glad|delighted) to (?:assist|help) you(?: with that)?|how (?:may|can) i assist you(?: today)?)\b/i, 'warn'],
+  ['assist-filler', /\b(?:i(?:'d| would) be (?:happy|glad|delighted) to (?:assist|help)\b|how (?:may|can) i assist you(?: today)?)\b/i, 'warn'],
   ['hollow-opener', /^(?:certainly|absolutely|of course|great question|sure thing)[!.,]/i, 'warn'],
   ['anything-else', /\bis there anything else (?:i can|that i can) (?:help|assist) you with\b/i, 'warn'],
+  ['stiff-refusal', /\bi(?:'m| am) (?:unable|not able) to (?:assist|help|process|complete)\b|\bi (?:cannot|can't) (?:assist|help) with (?:that|this)(?: request)?\b/i, 'warn'],
+  ['formal-apology', /\bi apologi[sz]e\b/i, 'warn'],
   ['hold-script', /\bplease hold\b/i, 'warn'],
 ];
 
@@ -52,6 +57,8 @@ export function checkReply(reply: string, opts: StyleOptions): StyleIssue[] {
     if (/(^|\n)\s*(?:[-*•]|\d+[.)])\s+/.test(text) || /\*\*|__|^#+\s/m.test(text)) add('voice-formatting', 'error', 'lists or markdown cannot be spoken');
     if (/https?:\/\/|www\./i.test(text)) add('voice-url', 'error', 'do not read URLs aloud; offer to send it');
     if (/\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?/.test(text)) add('voice-iso-date', 'error', 'say dates the way people do ("tomorrow at 3")');
+    if (/\b(?=[A-Z0-9-]*\d)(?=[A-Z0-9-]*[A-Z])[A-Z0-9]{2,}(?:-[A-Z0-9]{2,}){2,}\b/.test(text)) add('voice-code', 'warn', 'codes read aloud are hard to follow; offer to text it or spell it in groups');
+    if (opts.isFirstTurn && opts.requireDisclosure && !(/\b(?:ai|a\.i\.|artificial|virtual assistant)\b/i.test(text) && /\brecord/i.test(text))) add('missing-disclosure', 'error', 'first turn must say it is an AI and that calls are recorded');
     if (EMOJI.test(text)) add('voice-emoji', 'error', 'emoji in speech');
     if (/\b(?:e\.g\.|i\.e\.|etc\.)/i.test(text)) add('voice-abbrev', 'warn', 'abbreviations sound odd when spoken');
     const total = words(text).length;

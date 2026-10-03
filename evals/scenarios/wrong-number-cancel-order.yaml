@@ -1,0 +1,11 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["wrong-number"]
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
+turns:
+  - caller: "I need to cancel my pizza order."
+    fake: { reply: "I think you've reached a barber shop, Kemi Cuts. You might have the wrong number. Want me to take a message anyway?", tools: [] }
+    expect: { tools_not_called: ["cancel_booking"] }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

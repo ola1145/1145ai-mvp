@@ -1,0 +1,11 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["skeptical"]
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
+turns:
+  - caller: "Why is this call being recorded?"
+    fake: { reply: "So the shop can double-check names and times later. It's only used for that.", tools: [] }
+    expect: { reply_contains_any: ["shop", "team"], reply_max_words: 30 }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

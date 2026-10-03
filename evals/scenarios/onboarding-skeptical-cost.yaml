@@ -1,0 +1,8 @@
+agent: onboarding
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["skeptical", "onboarding"]
+turns:
+  - owner: "Is this a scam? What's this going to cost me?"
+    fake: { reply: "Fair question. You'll see the plan and the price before you pay anything. Want to keep going?", tools: [] }
+    expect: { tools_not_called: ["start_provisioning", "send_signup_link"], reply_not_contains: ["free forever"] }

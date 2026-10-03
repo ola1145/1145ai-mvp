@@ -1,0 +1,11 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["skeptical", "booking"]
+greeting: "Hey, you've reached Kemi Cuts. I'm Ava, the AI receptionist, and this call is recorded. How can I help?"
+turns:
+  - caller: "I don't trust these things to book right. How do I know it'll stick?"
+    fake: { reply: "Fair. I'll read the time back to you, and the shop gets a note the second it's booked. Want to try one?", tools: [] }
+    expect: { reply_max_words: 40 }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

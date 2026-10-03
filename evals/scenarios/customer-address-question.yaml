@@ -1,0 +1,11 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["kb"]
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
+turns:
+  - caller: "Where are you located?"
+    fake: { reply: "We're on Main Street in Frisco, next to the post office. Want me to book you in?", tools: ["search_knowledge"] }
+    expect: { tools_called: ["search_knowledge"], reply_not_contains: ["http", "www"] }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

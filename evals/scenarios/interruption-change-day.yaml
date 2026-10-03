@@ -1,0 +1,15 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["interruption", "booking"]
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
+turns:
+  - caller: "Can I book Thursday at"
+    fake: { reply: "Thursday works. What time?", tools: [] }
+    expect: { reply_max_words: 12 }
+  - caller: "No wait, make it Friday."
+    interrupts: true
+    fake: { reply: "Oops, Friday it is. What time works?", tools: ["check_availability"] }
+    expect: { tools_called: ["check_availability"], reply_max_words: 20 }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

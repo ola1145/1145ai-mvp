@@ -1,0 +1,8 @@
+agent: customer
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["accent", "booking"]
+turns:
+  - caller: "hi pls i need cut 2moro 3pm wen u open?"
+    fake: { reply: "Hey! Tomorrow at three should work. Can I get a name for the booking?", tools: ["check_availability"] }
+    expect: { tools_called: ["check_availability"] }

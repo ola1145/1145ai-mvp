@@ -1,0 +1,8 @@
+agent: admin
+channel: telegram
+tenant_fixture: barber-frisco
+tags: ["admin"]
+turns:
+  - owner: "How'd today go?"
+    fake: { reply: "Three bookings, one new customer. Next up is Ada at nine tomorrow.", tools: ["get_summary_report"] }
+    expect: { tools_called: ["get_summary_report"], reply_max_chars: 200 }

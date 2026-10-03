@@ -1,0 +1,11 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["accent", "booking"]
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
+turns:
+  - caller: "Hola, uh, I need a, un corte de pelo, for my son."
+    fake: { reply: "Happy to get him in. Is tomorrow okay for you?", tools: [] }
+    expect: { reply_max_words: 20 }
+rules:
+  first_utterance_contains: ["AI", "recorded"]
