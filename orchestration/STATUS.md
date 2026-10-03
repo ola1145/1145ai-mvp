@@ -10,8 +10,8 @@ Last update: 2026-10-03 · Phase 0 in progress (cloud session, branch `claude/bo
 | 0.2 Baseline | green | Lockfiles (`pnpm-lock.yaml`, `agents/uv.lock`, `engines/livekit-agent/uv.lock`) are already on `main`, so no `[1145:P3] lock dependencies` PR is needed. `pnpm install --frozen-lockfile`, `make test` (TS + 7 + 9 Python), `make typecheck`, `make synth` all pass. |
 | 0.3 MCP | partial | In this container the repo `.mcp.json` servers (linear, context7, livekit-docs) fail with a proxy 403, so they cannot be checked here. Claude.ai connectors answer: Linear (list teams/projects/users/issues) and GitHub (get repo, PRs, branches). `aws-knowledge` has a connector equivalent. Stripe MCP needs `STRIPE_MCP_TEST_KEY`; GitHub MCP in `.mcp.json` needs `GITHUB_MCP_PAT`. Nothing dropped yet; decide after a run on your machine. |
 | 0.4 Skills | partial | Nine `1145-*` skills load. Subagent trigger tests not run yet. |
-| 0.5 Secrets | waiting | `.env` is on the owner's machine, not here. Previous note: only `AWS_REGION`, `CURSOR_AGENT_MODEL`, `GITHUB_REPO_URL`, `LINEAR_TEAM_KEY`, `RESOLVER_MODE`, `STATIC_TENANT_JSON`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` were set. |
-| 0.6 GitHub | not verified | Repo `ola1145/1145ai-mvp` exists; only branch `main`; no PRs ever opened. `setup.sh` / `verify.sh` need `GH_ADMIN_TOKEN` and your go-ahead. |
+| 0.5 Secrets | blocked | Owner ran `push.sh` on 2026-10-03; it stopped at `.env` line 63, a bare Linear connect URL that bash tries to execute while sourcing. Fix: comment the line out, re-run. `CLAUDE_CODE_OAUTH_TOKEN` and `AUTOMERGE_PAT` repo secrets still missing. |
+| 0.6 GitHub | mostly done | Owner ran `setup.sh` (ok). `verify.sh`: auto-merge, delete-branch, squash-only, required checks, prod reviewers all ok. Failing only on the two secrets above. |
 | 0.7 Linear | partly done, needs a decision | Project "1145ai MVP" exists with 53 issues, and the Devin and Cursor users exist in the workspace (integrations installed). **14 issues were marked Done with no work behind them (reset to Backlog on 2026-10-03)** (see below). |
 
 ## Linear anomaly (needs owner decision)
@@ -22,4 +22,4 @@ C0, P1–P8, T0–T4 (14 issues, not 16 as first reported) were in state Done, b
 
 | Issue | Agent | State | PR | Checks | Blocker |
 |---|---|---|---|---|---|
-| all | — | Phase 1 not started | — | — | `GH_ADMIN_TOKEN` (owner will add it as an environment secret), secrets, GitHub setup confirmation |
+| all | — | Phase 1 not started | — | — | two repo secrets (`CLAUDE_CODE_OAUTH_TOKEN`, `AUTOMERGE_PAT`) so `verify.sh` passes |
