@@ -11,10 +11,13 @@ export class DataStack extends Stack {
   readonly tenantBucket: s3.Bucket;
   readonly auditBucket: s3.Bucket;
   readonly tenantDataRole: iam.Role;
+  /** Customer-managed key for the table and tenant bucket. */
+  readonly dataKey: kms.Key;
 
   constructor(scope: Construct, id: string, props: StackProps) {
     super(scope, id, props);
     const key = new kms.Key(this, 'DataKey', { enableKeyRotation: true });
+    this.dataKey = key;
 
     this.table = new ddb.TableV2(this, 'Table', {
       tableName: `${id}-t1145`,
@@ -56,8 +59,12 @@ export class DataStack extends Stack {
     key.grantEncryptDecrypt(this.tenantDataRole);
   }
 
-  /** Route items only (NUMBER#, IDENTITY#, ENGINEAGENT#, SIGNUP#, REFERRAL#). For resolvers and webhook routers. */
+  /**
+   * Route items only (NUMBER#, IDENTITY#, ENGINEAGENT#, SIGNUP#, REFERRAL#). For resolvers and webhook routers.
+   * Includes kms:Decrypt on the table key, which reads need because the table uses a customer-managed key (CR C1-2).
+   */
   grantRouteRead(grantee: iam.IGrantable) {
+    this.dataKey.grantDecrypt(grantee);
     grantee.grantPrincipal.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['dynamodb:GetItem', 'dynamodb:Query'],
       resources: [this.table.tableArn],

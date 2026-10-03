@@ -1,10 +1,24 @@
 import type { Channel, TenantId } from './tenant-context.js';
 
-export type EventType =
-  | 'call.started' | 'call.ended' | 'booking.created' | 'booking.updated' | 'booking.cancelled'
-  | 'message.taken' | 'handoff.requested' | 'conversation.message' | 'onboarding.status'
-  | 'tenant.provisioned' | 'tenant.state_changed' | 'channel.unlock_changed' | 'usage.recorded'
-  | 'admin.change_applied';
+/**
+ * Every EventBridge detail-type on the 1145 bus. Mirrors `type.enum` and `$defs` in
+ * contracts/events/events.schema.json (enforced by packages/shared/test/events.test.ts).
+ * Add new types here AND in the schema via a change request to C0; never rename or remove one.
+ */
+export const EVENT_TYPES = [
+  'call.started', 'call.ended', 'booking.created', 'booking.updated', 'booking.cancelled',
+  'message.taken', 'handoff.requested', 'conversation.message', 'onboarding.status',
+  'tenant.provisioned', 'tenant.state_changed', 'channel.unlock_changed', 'usage.recorded',
+  'admin.change_applied',
+  // Added by CR E2-1: live transcript turns (LiveKit engine), best effort, routed only to /tenants/<tid>/live.
+  'transcript.partial',
+] as const;
+
+export type EventType = (typeof EVENT_TYPES)[number];
+
+export function isEventType(v: unknown): v is EventType {
+  return typeof v === 'string' && (EVENT_TYPES as readonly string[]).includes(v);
+}
 
 export interface EventEnvelope<T extends Record<string, unknown> = Record<string, unknown>> {
   type: EventType;
