@@ -43,6 +43,12 @@ def sip_info_from_attributes(attrs: dict[str, str]) -> SipCallInfo:
     )
 
 
+def mask_caller(e164: str | None) -> str:
+    """Last four digits only: what events and logs get instead of the caller's number."""
+    digits = re.sub(r"\D", "", e164 or "")
+    return "***" + digits[-4:] if len(digits) >= 4 else ""
+
+
 def booking_idempotency_key(call_id: str, slot_start: str, service_id: str) -> str:
     """Same call + same slot + same service = same booking, even if the LLM calls the tool twice."""
     return "bk-" + hashlib.sha256(f"{call_id}|{slot_start}|{service_id}".encode()).hexdigest()[:32]
