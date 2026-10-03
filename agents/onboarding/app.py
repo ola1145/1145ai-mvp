@@ -1,4 +1,10 @@
-"""AgentCore Runtime entrypoint for the onboarding agent. Deploy with the AgentCore starter toolkit (see task W1-16)."""
+"""
+AgentCore Runtime entrypoint for the onboarding agent (Sonnet: rare, high-value conversations).
+
+Router payload: {text, channel, displayName?, onboardingId}. The onboarding id came from the verified identity route.
+Short-term memory is keyed by runtime session id `onb-<onboardingId>`, so web chat and Telegram share one thread.
+Deploy: agents/deploy/README.md (owner follow-up; nothing here deploys itself).
+"""
 from __future__ import annotations
 
 import os
@@ -9,6 +15,8 @@ from strands import Agent, tool
 from strands.models import BedrockModel
 
 from common.api import HttpApi
+from common.memory import memory_factory_from_env
+from common.runtime import onboarding_turn, run_turn
 from onboarding.tools import make_onboarding_tools
 
 app = BedrockAgentCoreApp()
@@ -18,13 +26,14 @@ MODEL_ID = os.environ.get("MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v
 
 @app.entrypoint
 def invoke(payload: dict, context=None) -> dict:
-    onboarding_id = payload["onboardingId"]          # set by the router from the verified identity route
-    api = HttpApi(os.environ["ONBOARDING_API_URL"], os.environ["ONBOARDING_SERVICE_TOKEN"])
-    tools = [tool(fn) for fn in make_onboarding_tools(api, onboarding_id)]
-    # TODO(W1-16): AgentCore Memory (short-term) keyed by runtime session id = f"onb-{onboarding_id}" so WhatsApp -> web chat continues.
-    agent = Agent(model=BedrockModel(model_id=MODEL_ID), system_prompt=SYSTEM, tools=tools)
-    result = agent(payload.get("text", ""))
-    return {"reply": str(result)}
+    turn = onboarding_turn(payload)
+
+    def make_agent(session_manager):
+        api = HttpApi(os.environ["ONBOARDING_API_URL"], os.environ["ONBOARDING_SERVICE_TOKEN"])
+        tools = [tool(fn) for fn in make_onboarding_tools(api, payload["onboardingId"])]
+        return Agent(model=BedrockModel(model_id=MODEL_ID), system_prompt=SYSTEM, tools=tools, session_manager=session_manager)
+
+    return run_turn(turn, make_agent=make_agent, memory_factory=memory_factory_from_env(os.environ))
 
 
 if __name__ == "__main__":
