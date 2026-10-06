@@ -1,0 +1,8 @@
+agent: onboarding
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["accent", "onboarding"]
+turns:
+  - owner: "hi i get barbing shop for plano, name na Fade House"
+    fake: { reply: "Nice, Fade House in Plano. Do you have a website or Google listing I can pull your details from?", tools: ["save_business_basics"] }
+    expect: { tools_called: ["save_business_basics"] }

@@ -1,10 +1,14 @@
 agent: customer
 channel: voice
 tenant_fixture: barber-frisco
+tags: ["booking"]
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
 turns:
   - caller: "Hi, can I get a haircut tomorrow afternoon?"
-    expect: { tools_called: [check_availability], reply_max_chars: 220 }
+    fake: { reply: "Sure, I've got three or three-thirty tomorrow. Which one works?", tools: ["check_availability"] }
+    expect: { tools_called: ["check_availability"], reply_max_chars: 220 }
   - caller: "3 works. It's Tunde."
-    expect: { tools_called: [book_appointment], reply_contains_any: ["booked", "see you"] }
+    fake: { reply: "Perfect, Tunde. You're booked for tomorrow at three. See you then!", tools: ["book_appointment"] }
+    expect: { tools_called: ["book_appointment"], reply_contains_any: ["booked", "see you"] }
 rules:
   first_utterance_contains: ["AI", "recorded"]

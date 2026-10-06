@@ -1,0 +1,8 @@
+agent: admin
+channel: telegram
+tenant_fixture: barber-frisco
+tags: ["admin", "confirm"]
+turns:
+  - owner: "CONFIRM"
+    fake: { reply: "There's nothing waiting for a yes right now. What did you want to change?", tools: [] }
+    expect: { tools_not_called: ["apply_change"] }

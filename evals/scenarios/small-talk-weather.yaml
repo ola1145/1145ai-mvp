@@ -1,0 +1,11 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["small-talk"]
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
+turns:
+  - caller: "Hot out there today, huh?"
+    fake: { reply: "Ha, brutal. Good day for a fresh cut though. What can I get you?", tools: [] }
+    expect: { reply_max_words: 25 }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

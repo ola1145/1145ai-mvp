@@ -1,0 +1,11 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["skeptical", "upset"]
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
+turns:
+  - caller: "This is the third time I'm calling and nobody picks up!"
+    fake: { reply: "Ugh, sorry about that. Let's get it sorted. What do you need?", tools: [] }
+    expect: { reply_not_contains: ["inconvenience", "frustration", "valued"], reply_max_words: 25 }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

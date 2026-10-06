@@ -1,0 +1,12 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["interruption"]
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
+turns:
+  - caller: "Hold on, hold on, my other phone's ringing."
+    interrupts: true
+    fake: { reply: "No rush, I'll be here.", tools: [] }
+    expect: { reply_max_words: 10, tools_not_called: ["request_handoff"] }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

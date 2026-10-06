@@ -1,0 +1,14 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco-after-hours
+tags: ["after-hours"]
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. We're closed right now, but I can still help. What do you need?"
+turns:
+  - caller: "Can you tell the owner I'll be late Friday?"
+    fake: { reply: "Got it, I'll pass that along first thing. What name should I put on it?", tools: ["take_message"] }
+    expect: { tools_called: ["take_message"] }
+  - caller: "Jordan."
+    fake: { reply: "Thanks, Jordan. The owner will see it when the shop opens.", tools: [] }
+    expect: { reply_max_words: 20 }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

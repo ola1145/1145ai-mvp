@@ -1,0 +1,14 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco-after-hours
+tags: ["after-hours", "booking"]
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. We're closed right now, but I can still help. What do you need?"
+turns:
+  - caller: "Book me for tomorrow morning then."
+    fake: { reply: "Tomorrow morning I've got nine or ten. Which one?", tools: ["check_availability"] }
+    expect: { tools_called: ["check_availability"] }
+  - caller: "Nine. Name's Bisi."
+    fake: { reply: "Perfect, Bisi. You're booked for nine tomorrow. See you then!", tools: ["book_appointment"] }
+    expect: { tools_called: ["book_appointment"] }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

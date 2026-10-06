@@ -1,10 +1,15 @@
 agent: onboarding
 channel: telegram
+tenant_fixture: barber-frisco
 referral_code: FRIEND1
+tags: ["onboarding"]
 turns:
   - owner: "/start FRIEND1"
+    fake: { reply: "Hey, welcome! Looks like a friend sent you over. What's your business called?", tools: [] }
     expect: { reply_max_chars: 600 }
   - owner: "Kemi Cuts, barber shop in Frisco TX"
-    expect: { tools_called: [save_business_basics, send_signup_link] }
+    fake: { reply: "Love it. I've sent you a sign-up link. Reply YES when you're in and I'll start on your number.", tools: ["save_business_basics", "send_signup_link"] }
+    expect: { tools_called: ["save_business_basics", "send_signup_link"] }
   - owner: "YES"
-    expect: { tools_called: [start_provisioning] }
+    fake: { reply: "Done, I'm getting your number ready. Should only take a few minutes.", tools: ["start_provisioning"] }
+    expect: { tools_called: ["start_provisioning"] }

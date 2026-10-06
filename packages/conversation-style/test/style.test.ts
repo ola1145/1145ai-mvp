@@ -29,6 +29,41 @@ describe('voice constraints', () => {
   });
 });
 
+describe('more robotic patterns', () => {
+  it('flags tool narration and system talk', () => {
+    expect(rules('I am now accessing the scheduling system to retrieve your appointment.')).toContain('tool-narration');
+    expect(rules('Let me query the database for that.')).toContain('tool-narration');
+    expect(rules('One sec, checking the calendar.')).not.toContain('tool-narration');
+  });
+  it('flags stiff formal phrasing', () => {
+    expect(rules('Thank you for contacting Kemi Cuts.')).toContain('call-center');
+    expect(rules('Please be informed that we are closed.')).toContain('call-center');
+    expect(rules('I am unable to assist with that request.')).toContain('stiff-refusal');
+    expect(rules('I apologize.')).toContain('formal-apology');
+    expect(rules("Sorry, I missed that, what day?")).toEqual([]);
+  });
+  it('flags "happy to help you" variants and virtual-assistant self-talk', () => {
+    expect(rules("I'd be happy to help you with that!")).toContain('assist-filler');
+    expect(rules('As a virtual assistant I cannot do that.')).toContain('ai-self-talk');
+  });
+  it('does not flag natural lines', () => {
+    for (const ok of ["Sure, when works for you?", "Ugh, sorry about that. Let's get it sorted.", "You're all set for tomorrow at three. See you then!", "I can't cancel that one without a code, but I can take a message."]) {
+      expect(rules(ok)).toEqual([]);
+    }
+  });
+  it('requires the AI and recording disclosure on a voice first turn when asked to', () => {
+    const bare = 'Hi, this is Ava at Kemi Cuts. What can I do for you?';
+    expect(rules(bare, 'voice', { isFirstTurn: true, requireDisclosure: true })).toContain('missing-disclosure');
+    expect(rules("Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?", 'voice', { isFirstTurn: true, requireDisclosure: true })).not.toContain('missing-disclosure');
+    expect(rules('Hi, I am the AI receptionist. What can I do for you?', 'voice', { isFirstTurn: true, requireDisclosure: true })).toContain('missing-disclosure');
+    expect(rules(bare, 'voice', { isFirstTurn: false, requireDisclosure: true })).not.toContain('missing-disclosure');
+  });
+  it('flags spoken digits and codes that should be said like people say them', () => {
+    expect(rules('Your confirmation is A7F-29K-1B3-XQ9.')).toContain('voice-code');
+    expect(rules('Call us at 214-555-0123.')).not.toContain('voice-code');
+  });
+});
+
 describe('conversation-level repetition', () => {
   it('catches repeated openers, repeated "anything else", and name overuse', () => {
     const turns = [

@@ -1,0 +1,11 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["skeptical", "handoff"]
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
+turns:
+  - caller: "Just put me through to a person."
+    fake: { reply: "Sure, let me grab someone for you, one sec.", tools: ["request_handoff"] }
+    expect: { tools_called: ["request_handoff"], reply_not_contains: ["please hold", "transfer your call"] }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

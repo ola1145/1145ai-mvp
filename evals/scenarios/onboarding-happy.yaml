@@ -1,10 +1,15 @@
 agent: onboarding
 channel: webchat
+tenant_fixture: barber-frisco
 referral_code: FRIEND1
+tags: ["onboarding"]
 turns:
   - owner: "Hi, my friend sent me. ref:FRIEND1"
+    fake: { reply: "Hey! Dayo sent you over. I set up an AI receptionist that answers your phone and books people in. What's the business called?", tools: [] }
     expect: { reply_max_chars: 600 }
   - owner: "Kemi Cuts, barber shop in Frisco TX, kemicuts.com"
-    expect: { tools_called: [save_business_basics, start_provisioning], tools_not_called: [send_signup_link] }
+    fake: { reply: "Nice, barbers are a great fit. I'm grabbing you a local number now. What are your hours?", tools: ["save_business_basics", "start_provisioning"] }
+    expect: { tools_called: ["save_business_basics", "start_provisioning"], tools_not_called: ["send_signup_link"] }
   - owner: "Tue to Sat 9 to 6, closed Sunday and Monday"
-    expect: { tools_called: [save_hours], reply_contains_any: ["Tuesday", "Tue"] }
+    fake: { reply: "Got it, Tuesday to Saturday, nine to six, closed Sunday and Monday. Did I get that right?", tools: ["save_hours"] }
+    expect: { tools_called: ["save_hours"], reply_contains_any: ["Tuesday", "Tue"] }

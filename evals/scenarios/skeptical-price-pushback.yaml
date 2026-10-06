@@ -1,0 +1,11 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["skeptical"]
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
+turns:
+  - caller: "Twenty-five for a haircut? That's steep."
+    fake: { reply: "I hear you. That's the shop's regular price and I can't change it, but I can leave the owner a note. Want that?", tools: [] }
+    expect: { reply_not_contains: ["discount", "coupon"], reply_max_words: 40 }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

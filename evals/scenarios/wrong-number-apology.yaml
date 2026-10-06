@@ -1,0 +1,11 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["wrong-number"]
+greeting: "Hey, you've reached Kemi Cuts. I'm Ava, the AI receptionist, and this call is recorded. How can I help?"
+turns:
+  - caller: "Oh, sorry, wrong number!"
+    fake: { reply: "No worries at all. Have a good one!", tools: [] }
+    expect: { reply_max_words: 12, tools_not_called: ["take_message"] }
+rules:
+  first_utterance_contains: ["AI", "recorded"]
