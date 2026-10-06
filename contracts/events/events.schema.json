@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://1145.ai/contracts/events.schema.json",
   "title": "1145ai EventBridge events (bus: 1145)",
-  "description": "Every event has the envelope below in EventBridge `detail`. `source` = 1145.<service>. detail-type = the `type` value.",
+  "description": "Every event has the envelope below in EventBridge `detail`. `source` = 1145.<service>. detail-type = the `type` value. `data` follows `$defs[type]`. Changes are additive only: new fields are optional and nothing is renamed or removed in the MVP. Phone numbers in `data` are always masked (+1••••••1234).",
   "type": "object",
   "required": ["type", "version", "tenantId", "correlationId", "occurredAt", "data"],
   "properties": {
@@ -11,7 +11,8 @@
         "call.started", "call.ended", "booking.created", "booking.updated", "booking.cancelled",
         "message.taken", "handoff.requested", "conversation.message",
         "onboarding.status", "tenant.provisioned", "tenant.state_changed",
-        "channel.unlock_changed", "usage.recorded", "admin.change_applied"
+        "channel.unlock_changed", "usage.recorded", "admin.change_applied",
+        "transcript.partial"
       ]
     },
     "version": { "const": 1 },
@@ -21,10 +22,176 @@
     "data": { "type": "object" }
   },
   "$defs": {
-    "call.started": { "type": "object", "required": ["callId", "engine", "channel", "callerMasked"], "properties": { "callId": {"type": "string"}, "engine": {"enum": ["livekit-telnyx", "elevenlabs"]}, "channel": {"enum": ["voice", "webchat"]}, "callerMasked": {"type": "string"} } },
-    "call.ended": { "type": "object", "required": ["callId", "durationSec", "endReason"], "properties": { "callId": {"type": "string"}, "durationSec": {"type": "integer"}, "endReason": {"enum": ["caller_hangup", "agent_hangup", "transfer", "error", "over_cap", "suspended"]}, "transcriptKey": {"type": "string"}, "engineConversationId": {"type": "string"} } },
-    "booking.created": { "type": "object", "required": ["bookingId", "start", "serviceId", "via"], "properties": { "bookingId": {"type": "string"}, "start": {"type": "string"}, "serviceId": {"type": "string"}, "via": {"enum": ["voice", "webchat", "whatsapp", "telegram", "sms", "dashboard", "admin-agent"]} } },
-    "onboarding.status": { "type": "object", "required": ["step", "state"], "properties": { "step": {"enum": ["number", "knowledge", "profile", "agent_name", "smoke_call", "activate"]}, "state": {"enum": ["started", "waiting_owner", "done", "failed"]}, "messageForOwner": {"type": "string"} } },
-    "usage.recorded": { "type": "object", "required": ["callId", "billableSeconds", "engine"], "properties": { "callId": {"type": "string"}, "billableSeconds": {"type": "integer"}, "engine": {"type": "string"} } }
+    "call.started": {
+      "type": "object",
+      "required": ["callId", "engine", "channel", "callerMasked"],
+      "properties": {
+        "callId": { "type": "string" },
+        "engine": { "enum": ["livekit-telnyx", "elevenlabs"] },
+        "channel": { "enum": ["voice", "webchat"] },
+        "callerMasked": { "type": "string" }
+      },
+      "examples": [{ "callId": "call-7f3a", "engine": "livekit-telnyx", "channel": "voice", "callerMasked": "+1••••••0123" }]
+    },
+    "call.ended": {
+      "type": "object",
+      "required": ["callId", "durationSec", "endReason"],
+      "properties": {
+        "callId": { "type": "string" },
+        "durationSec": { "type": "integer" },
+        "endReason": { "enum": ["caller_hangup", "agent_hangup", "transfer", "error", "over_cap", "suspended"] },
+        "transcriptKey": { "type": "string" },
+        "engineConversationId": { "type": "string" },
+        "channel": { "enum": ["voice", "webchat"], "description": "Optional (matches CallEndedData.channel); voice when absent." }
+      },
+      "examples": [{ "callId": "call-7f3a", "durationSec": 95, "endReason": "caller_hangup", "transcriptKey": "tenants/t_tenanta01/transcripts/call-7f3a.json", "channel": "voice" }]
+    },
+    "booking.created": {
+      "type": "object",
+      "required": ["bookingId", "start", "serviceId", "via"],
+      "properties": {
+        "bookingId": { "type": "string" },
+        "start": { "type": "string" },
+        "serviceId": { "type": "string" },
+        "via": { "enum": ["voice", "webchat", "whatsapp", "telegram", "sms", "dashboard", "admin-agent"] },
+        "customerMasked": { "type": "string", "description": "Masked customer phone, or 'unknown' (emitted by tool-api createBooking)." }
+      },
+      "examples": [{ "bookingId": "bk_01J9ZK", "start": "2026-10-06T20:00:00.000Z", "serviceId": "svc_haircut", "via": "voice", "customerMasked": "+1••••••0123" }]
+    },
+    "booking.updated": {
+      "type": "object",
+      "required": ["bookingId", "start", "via"],
+      "properties": {
+        "bookingId": { "type": "string" },
+        "start": { "type": "string", "description": "New start (ISO 8601)." },
+        "previousStart": { "type": "string" },
+        "serviceId": { "type": "string" },
+        "via": { "enum": ["voice", "webchat", "whatsapp", "telegram", "sms", "dashboard", "admin-agent"] }
+      },
+      "examples": [{ "bookingId": "bk_01J9ZK", "start": "2026-10-07T15:00:00.000Z", "previousStart": "2026-10-06T20:00:00.000Z", "serviceId": "svc_haircut", "via": "voice" }]
+    },
+    "booking.cancelled": {
+      "type": "object",
+      "required": ["bookingId", "via"],
+      "properties": {
+        "bookingId": { "type": "string" },
+        "start": { "type": "string" },
+        "serviceId": { "type": "string" },
+        "via": { "enum": ["voice", "webchat", "whatsapp", "telegram", "sms", "dashboard", "admin-agent"] },
+        "reason": { "type": "string", "maxLength": 500 }
+      },
+      "examples": [{ "bookingId": "bk_01J9ZK", "start": "2026-10-06T20:00:00.000Z", "via": "voice", "reason": "Can't make it, will call next week" }]
+    },
+    "message.taken": {
+      "type": "object",
+      "required": ["messageId", "urgency"],
+      "properties": {
+        "messageId": { "type": "string" },
+        "urgency": { "enum": ["normal", "urgent"] },
+        "callbackMasked": { "type": "string" }
+      },
+      "examples": [{ "messageId": "msg_01J9ZM", "urgency": "normal", "callbackMasked": "+1••••••0123" }]
+    },
+    "handoff.requested": {
+      "type": "object",
+      "required": ["reason", "action"],
+      "properties": {
+        "reason": { "type": "string", "maxLength": 300 },
+        "action": { "enum": ["transfer", "take_message"] }
+      },
+      "examples": [{ "reason": "Wants a quote for a color correction", "action": "transfer" }]
+    },
+    "conversation.message": {
+      "type": "object",
+      "description": "Analysis of one finished conversation (call or chat) for the owner's dashboard.",
+      "required": ["summary"],
+      "properties": {
+        "callId": { "type": "string" },
+        "summary": { "type": "string" },
+        "sentiment": { "enum": ["positive", "neutral", "negative"] },
+        "intents": { "type": "array", "items": { "type": "string" } }
+      },
+      "examples": [{ "callId": "call-7f3a", "summary": "Booked a haircut for Tuesday at 3.", "sentiment": "positive", "intents": ["book"] }]
+    },
+    "onboarding.status": {
+      "type": "object",
+      "required": ["step", "state"],
+      "properties": {
+        "step": { "enum": ["number", "knowledge", "profile", "agent_name", "smoke_call", "activate"] },
+        "state": { "enum": ["started", "waiting_owner", "done", "failed"] },
+        "messageForOwner": { "type": "string" }
+      },
+      "examples": [{ "step": "number", "state": "done", "messageForOwner": "Your new number is ready." }]
+    },
+    "tenant.provisioned": {
+      "type": "object",
+      "required": ["onboardingId", "engine"],
+      "properties": {
+        "onboardingId": { "type": "string" },
+        "engine": { "enum": ["livekit-telnyx", "elevenlabs"] },
+        "templateVersion": { "type": "string" },
+        "numberMasked": { "type": "string" }
+      },
+      "examples": [{ "onboardingId": "ob_01J9Z0", "engine": "livekit-telnyx", "templateVersion": "receptionist@1.0.0", "numberMasked": "+1••••••4567" }]
+    },
+    "tenant.state_changed": {
+      "type": "object",
+      "required": ["state", "reasonCode", "actor"],
+      "properties": {
+        "state": { "enum": ["active", "suspended", "over_cap"] },
+        "previousState": { "enum": ["active", "suspended", "over_cap"] },
+        "reasonCode": { "type": "string" },
+        "actor": { "type": "string", "description": "Ops user sub, 'billing', or 'system'." }
+      },
+      "examples": [{ "state": "over_cap", "previousState": "active", "reasonCode": "minutes_cap", "actor": "system" }]
+    },
+    "channel.unlock_changed": {
+      "type": "object",
+      "description": "A channel became usable (or not) for a tenant. MVP channels need no third-party approval (ADR-0005); whatsapp/sms are Phase 2.",
+      "required": ["channel", "status"],
+      "properties": {
+        "channel": { "enum": ["voice", "webchat", "telegram", "whatsapp", "sms"] },
+        "status": { "enum": ["locked", "pending", "unlocked", "rejected"] },
+        "reasonCode": { "type": "string" }
+      },
+      "examples": [{ "channel": "webchat", "status": "unlocked" }]
+    },
+    "usage.recorded": {
+      "type": "object",
+      "required": ["callId", "billableSeconds", "engine"],
+      "properties": {
+        "callId": { "type": "string" },
+        "billableSeconds": { "type": "integer" },
+        "engine": { "type": "string" },
+        "cap": { "enum": ["ok", "warn", "over"], "description": "Cap state after this call (emitted by post-call)." }
+      },
+      "examples": [{ "callId": "call-7f3a", "billableSeconds": 120, "engine": "livekit-telnyx", "cap": "ok" }]
+    },
+    "admin.change_applied": {
+      "type": "object",
+      "description": "Emitted by tool-api applyChange after the atomic status flip + audit write (CR T2-1).",
+      "required": ["changeId", "kind"],
+      "properties": {
+        "changeId": { "type": "string" },
+        "kind": { "enum": ["hours", "service", "closed_date", "handoff_number"] },
+        "summary": { "type": "string", "description": "One plain sentence, e.g. 'Close Thursday, November 26 for Thanksgiving.'" },
+        "requiresStepUp": { "type": "boolean" },
+        "appliedBy": { "enum": ["owner", "staff"], "description": "Principal from the verified token, never from model output." },
+        "via": { "enum": ["voice", "webchat", "whatsapp", "telegram", "sms", "dashboard", "internal"], "description": "TenantContext channel the confirmation came through." }
+      },
+      "examples": [{ "changeId": "chg_01J9ZQ", "kind": "closed_date", "summary": "Close Thursday, November 26 for Thanksgiving.", "requiresStepUp": false, "appliedBy": "owner", "via": "telegram" }]
+    },
+    "transcript.partial": {
+      "type": "object",
+      "description": "One finished turn of a live call (LiveKit engine only, CR E2-1). Best effort, at most 2 per second per call, no retries. Consumed only by the live channel publisher; post-call reads the S3 transcript instead.",
+      "required": ["callId", "role", "text", "atSec"],
+      "properties": {
+        "callId": { "type": "string" },
+        "role": { "enum": ["agent", "caller"] },
+        "text": { "type": "string" },
+        "atSec": { "type": "number" }
+      },
+      "examples": [{ "callId": "call-7f3a", "role": "caller", "text": "Do you have anything tomorrow afternoon?", "atSec": 12.4 }]
+    }
   }
 }
