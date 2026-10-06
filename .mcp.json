@@ -5,6 +5,7 @@
     "aws-knowledge": { "type": "http", "url": "https://knowledge-mcp.global.api.aws" },
     "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" },
     "livekit-docs": { "type": "http", "url": "https://docs.livekit.io/mcp" },
-    "stripe": { "type": "http", "url": "https://mcp.stripe.com", "headers": { "Authorization": "Bearer ${STRIPE_MCP_TEST_KEY}" } }
+    "stripe": { "type": "http", "url": "https://mcp.stripe.com", "headers": { "Authorization": "Bearer ${STRIPE_MCP_TEST_KEY}" } },
+    "elevenlabs": { "type": "http", "url": "https://api.us.elevenlabs.io/v1/mcp", "oauth": { "clientId": "0d057191-f2bd-4516-89f8-997e7bfe6bc6" } }
   }
 }
