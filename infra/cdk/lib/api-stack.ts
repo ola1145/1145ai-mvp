@@ -14,6 +14,13 @@ import type { AuthStack } from './auth-stack.js';
 
 interface Props extends StackProps { data: DataStack; events: EventsStack; auth: AuthStack }
 
+/** Voice-path Lambda sizing. Lambda CPU scales with memory, and these handlers are short and latency-bound, so voice
+ *  routes get more memory than the rest. These are starting points, NOT measured values: tune from the numbers in
+ *  services/tool-api/bench/README.md (run in dev, with the ABAC role). */
+const VOICE_MEMORY_MB = 1024;
+const DEFAULT_MEMORY_MB = 512;
+const VOICE_PROVISIONED_CONCURRENCY = 2;
+
 /** Route table mirrors contracts/openapi/tenant-tools.yaml. voice=true -> provisioned concurrency (Add-9). Owner: T7. */
 const ROUTES: Array<{ method: apigw.HttpMethod; path: string; handler: string; voice?: boolean; auth: 'token' | 'iam' }> = [
   { method: apigw.HttpMethod.POST, path: '/v1/tools/availability', handler: 'check-availability', voice: true, auth: 'token' },
@@ -51,7 +58,7 @@ export class ApiStack extends Stack {
     for (const r of ROUTES) {
       const fn = new nodejs.NodejsFunction(this, `Fn-${r.handler}`, {
         ...bundlingProps, entry: fromRoot(`services/tool-api/src/handlers/${r.handler}.ts`),
-        runtime: lambda.Runtime.NODEJS_22_X, architecture: lambda.Architecture.ARM_64, memorySize: 512,
+        runtime: lambda.Runtime.NODEJS_22_X, architecture: lambda.Architecture.ARM_64, memorySize: r.voice ? VOICE_MEMORY_MB : DEFAULT_MEMORY_MB,
         timeout: Duration.seconds(r.voice ? 3 : 10),
         environment: {
           TABLE_NAME: props.data.table.tableName, TENANT_DATA_ROLE_ARN: props.data.tenantDataRole.roleArn,
@@ -64,8 +71,11 @@ export class ApiStack extends Stack {
       props.data.grantRouteRead(fn);
       fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['sts:AssumeRole', 'sts:TagSession'], resources: [props.data.tenantDataRole.roleArn] }));
 
-      const target = r.voice && this.node.tryGetContext('stage') === 'prod'
-        ? new lambda.Alias(this, `Live-${r.handler}`, { aliasName: 'live', version: fn.currentVersion, provisionedConcurrentExecutions: 2 })
+      // Provisioned concurrency removes cold starts (and the first AssumeRole) from the voice path. Always in prod; in dev
+      // only when benchmarking: `cdk synth -c voiceProvisioned=true`, so dev numbers can be compared warm vs. provisioned.
+      const provision = r.voice && (this.node.tryGetContext('stage') === 'prod' || String(this.node.tryGetContext('voiceProvisioned')) === 'true');
+      const target = provision
+        ? new lambda.Alias(this, `Live-${r.handler}`, { aliasName: 'live', version: fn.currentVersion, provisionedConcurrentExecutions: VOICE_PROVISIONED_CONCURRENCY })
         : fn;
       const integration = new HttpLambdaIntegration(`Int-${r.handler}`, target);
       api.addRoutes({ path: r.path, methods: [r.method], integration, authorizer: r.auth === 'iam' ? iamAuth : undefined });

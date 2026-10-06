@@ -22,9 +22,56 @@ async function secrets() {
   return secretsCache;
 }
 
+/** Structural twins of T0's KnowledgeQuery/KnowledgeHit/KnowledgeIndex (lib/repo.ts on claude/1145-t0). They are
+ *  declared here so this file compiles before and after T0 lands; the shapes are identical. */
+export interface KnowledgeQueryLike { tenantId: string; text: string; topK: number; verifiedOnly: boolean; filter: Record<string, unknown> }
+export interface KnowledgeHitLike { text: string; source: string; verified: boolean; tenantId: string; score?: number }
+export interface KnowledgeIndexLike { query(q: KnowledgeQueryLike): Promise<KnowledgeHitLike[]> }
+
+/** The two SDK calls the adapter needs, injected so the adapter is testable and so the SDK clients
+ *  (@aws-sdk/client-s3vectors, @aws-sdk/client-bedrock-runtime; see CHANGE_REQUESTS/T7-2) can be added by P3 later. */
+export interface KnowledgePorts {
+  vectorBucketName: string;
+  indexName: string;
+  /** Titan text embedding of the query text. */
+  embed(text: string): Promise<number[]>;
+  /** S3 Vectors QueryVectors. */
+  queryVectors(input: {
+    vectorBucketName: string; indexName: string; queryVector: { float32: number[] }; topK: number;
+    filter: Record<string, unknown>; returnMetadata: true; returnDistance: true;
+  }): Promise<{ vectors?: Array<{ key?: string; distance?: number; metadata?: Record<string, unknown> }> }>;
+}
+
+/** S3 Vectors-backed knowledge search. The filter is passed through exactly as the handler built it from the verified
+ *  context. Hits are re-checked anyway: wrong tenant or no text is dropped, missing `verified` means unverified. */
+export function s3VectorsKnowledge(ports: KnowledgePorts): KnowledgeIndexLike {
+  return {
+    async query(q) {
+      const queryVector = { float32: await ports.embed(q.text) };
+      const r = await ports.queryVectors({
+        vectorBucketName: ports.vectorBucketName, indexName: ports.indexName, queryVector, topK: q.topK,
+        filter: q.filter, returnMetadata: true, returnDistance: true,
+      });
+      const hits: KnowledgeHitLike[] = [];
+      for (const v of r.vectors ?? []) {
+        const m = v.metadata ?? {};
+        if (typeof m.text !== 'string' || !m.text || m.tenantId !== q.tenantId) continue;
+        hits.push({
+          text: m.text, source: typeof m.source === 'string' ? m.source : '', verified: m.verified === true,
+          tenantId: m.tenantId, ...(v.distance === undefined ? {} : { score: 1 - v.distance }),
+        });
+      }
+      return hits;
+    },
+  };
+}
+
 let memo: (ToolDeps & AuthDeps) | undefined;
-export async function prodDeps(): Promise<ToolDeps & AuthDeps> {
-  memo ??= {
+/** `knowledge` ports are optional: until the S3 Vectors and Bedrock clients are available to this lane the handlers
+ *  fall back to repo.searchVerifiedFacts. */
+export async function prodDeps(knowledge?: KnowledgePorts): Promise<ToolDeps & AuthDeps> {
+  if (memo) return memo;
+  const base: ToolDeps & AuthDeps = {
     repoFor: ddbRepoFor,
     publish: async (event) => {
       await eb.send(new PutEventsCommand({ Entries: [{
@@ -43,5 +90,7 @@ export async function prodDeps(): Promise<ToolDeps & AuthDeps> {
       return r.Item?.tid as string | undefined;
     },
   };
+  // Object.assign keeps this compiling both before and after ToolDeps gains the optional `knowledge` field (T0).
+  memo = knowledge ? Object.assign(base, { knowledge: s3VectorsKnowledge(knowledge) }) : base;
   return memo;
 }
