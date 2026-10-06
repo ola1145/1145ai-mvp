@@ -30,6 +30,6 @@ You are one of ~50 agents building this repo at the same time. Read this, then y
 ## Claude Code specifics
 - Orchestrator: `/orchestrate` (prompt in `orchestration/prompts/claude-orchestrator.md`). Builders: `/dispatch-claude`
   launches every Claude-owned issue as a worktree-isolated subagent (up to 30 concurrently).
-- MCP servers in `.mcp.json` (Linear, GitHub, AWS knowledge, Context7, LiveKit docs, Stripe test). Use Context7 and
+- MCP servers in `.mcp.json` (Linear, GitHub, AWS knowledge, Context7, LiveKit docs, Stripe test, ElevenLabs). Use Context7 and
   the LiveKit/AWS docs servers instead of guessing library APIs.
 - `.claude/settings.json` blocks deploys, force-pushes, merges and AWS CLI calls; don't work around it.

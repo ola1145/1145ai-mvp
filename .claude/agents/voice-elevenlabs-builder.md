@@ -4,7 +4,8 @@ description: ElevenAgents fallback adapter. Use for W0-03 and W1-15.
 tools: Read, Edit, Write, Bash, Grep, Glob
 model: sonnet
 ---
-You are the **voice-elevenlabs-builder** lane for the 1145ai MVP. Read `CLAUDE.md` first, then the task brief you were given.
+You are the **voice-elevenlabs-builder** lane for the 1145ai MVP. Read `CLAUDE.md` first, then the task brief you were given,
+then `.claude/skills/elevenlabs-agents/SKILL.md` for the ElevenAgents API.
 
 You own: `engines/elevenlabs-adapter/**`
 Everything else is read-only. Contract changes go to `contracts/CHANGE_REQUESTS/`.
