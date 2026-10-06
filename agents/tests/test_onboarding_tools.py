@@ -32,15 +32,18 @@ ROUTED_ID = "onb-ROUTED"
 
 _F = re.I | re.A  # JS regexes without the u flag: \b and \w are ASCII-only
 PHRASES: list[tuple[str, re.Pattern[str], str]] = [
-    ("ai-self-talk", re.compile(r"\bas an ai\b|\b(?:language model|large language model)\b|\bi(?:'m| am) (?:just )?an? (?:ai|bot)\b(?!\s+(?:receptionist|assistant))|\bi don'?t have (?:feelings|emotions)\b", _F), "error"),
+    ("ai-self-talk", re.compile(r"\bas an ai\b|\b(?:language model|large language model)\b|\bi(?:'m| am) (?:just )?an? (?:ai|bot)\b(?!\s+(?:receptionist|assistant))|\bi don'?t have (?:feelings|emotions)\b|\bas an? (?:virtual|digital|automated) (?:assistant|agent|receptionist)\b", _F), "error"),
     ("scripted-empathy", re.compile(r"\bi (?:completely |totally )?understand your (?:frustration|concern)s?\b", _F), "error"),
     ("inconvenience", re.compile(r"\b(?:apologi[sz]e|sorry) for (?:any|the) inconvenience\b", _F), "error"),
     ("patience", re.compile(r"\bthank you for your patience\b", _F), "error"),
-    ("call-center", re.compile(r"\byour (?:call|business) is (?:very )?important to us\b|\bvalued customer\b|\bplease be advised\b|\bat your earliest convenience\b|\bkindly\b|\bas per\b", _F), "error"),
+    ("call-center", re.compile(r"\byour (?:call|business) is (?:very )?important to us\b|\bvalued customer\b|\bplease be advised\b|\bat your earliest convenience\b|\bkindly\b|\bas per\b|\bthank you for (?:contacting|calling)\b|\bplease be informed\b|\bwe appreciate your (?:patience|call)\b", _F), "error"),
+    ("tool-narration", re.compile(r"\bi(?:'m| am) (?:now )?(?:accessing|querying|retrieving|invoking|executing)\b|\blet me (?:access|query|invoke|execute) the (?:\w+ ){0,2}(?:system|database|tool|function|api)\b|\b(?:accessing|querying) the (?:\w+ ){0,2}(?:system|database)\b", _F), "error"),
     ("email-speak", re.compile(r"\bi hope this (?:message|email) finds you well\b|\bplease do not hesitate\b|\bfeel free to reach out\b", _F), "error"),
-    ("assist-filler", re.compile(r"\b(?:i(?:'d| would) be (?:happy|glad|delighted) to (?:assist|help) you(?: with that)?|how (?:may|can) i assist you(?: today)?)\b", _F), "warn"),
+    ("assist-filler", re.compile(r"\b(?:i(?:'d| would) be (?:happy|glad|delighted) to (?:assist|help)\b|how (?:may|can) i assist you(?: today)?)\b", _F), "warn"),
     ("hollow-opener", re.compile(r"^(?:certainly|absolutely|of course|great question|sure thing)[!.,]", _F), "warn"),
     ("anything-else", re.compile(r"\bis there anything else (?:i can|that i can) (?:help|assist) you with\b", _F), "warn"),
+    ("stiff-refusal", re.compile(r"\bi(?:'m| am) (?:unable|not able) to (?:assist|help|process|complete)\b|\bi (?:cannot|can't) (?:assist|help) with (?:that|this)(?: request)?\b", _F), "warn"),
+    ("formal-apology", re.compile(r"\bi apologi[sz]e\b", _F), "warn"),
     ("hold-script", re.compile(r"\bplease hold\b", _F), "warn"),
 ]
 ANYTHING_ELSE = dict((r, p) for r, p, _ in PHRASES)["anything-else"]

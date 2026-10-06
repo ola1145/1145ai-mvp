@@ -598,6 +598,11 @@ dependencies = [
     { name = "httpx" },
     { name = "livekit-agents", extra = ["aws", "deepgram", "elevenlabs", "silero", "turn-detector"] },
     { name = "livekit-api" },
+    { name = "livekit-plugins-aws" },
+    { name = "livekit-plugins-deepgram" },
+    { name = "livekit-plugins-elevenlabs" },
+    { name = "livekit-plugins-silero" },
+    { name = "livekit-plugins-turn-detector" },
 ]
 
 [package.dev-dependencies]
@@ -610,8 +615,13 @@ dev = [
 requires-dist = [
     { name = "botocore", specifier = ">=1.35" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "livekit-agents", extras = ["deepgram", "elevenlabs", "aws", "silero", "turn-detector"], specifier = "~=1.2" },
-    { name = "livekit-api", specifier = ">=1.0" },
+    { name = "livekit-agents", extras = ["deepgram", "elevenlabs", "aws", "silero", "turn-detector"], specifier = "==1.8.4" },
+    { name = "livekit-api", specifier = "==1.2.1" },
+    { name = "livekit-plugins-aws", specifier = "==1.8.4" },
+    { name = "livekit-plugins-deepgram", specifier = "==1.8.4" },
+    { name = "livekit-plugins-elevenlabs", specifier = "==1.8.4" },
+    { name = "livekit-plugins-silero", specifier = "==1.8.4" },
+    { name = "livekit-plugins-turn-detector", specifier = "==1.8.4" },
 ]
 
 [package.metadata.requires-dev]
