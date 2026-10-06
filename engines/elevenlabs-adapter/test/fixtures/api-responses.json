@@ -1,0 +1,40 @@
+{
+  "_source": "Response bodies shaped from the ElevenLabs API definition (elevenlabs-js @ ec61f8e, Fern-generated serializers). Replace with live captures from the W0-03 spike when they exist.",
+  "duplicateAgent": { "agent_id": "agent_dup_01" },
+  "updateAgent": { "agent_id": "agent_dup_01", "name": "Bright Smiles · Ava" },
+  "getAgentWithKnowledge": {
+    "agent_id": "agent_dup_01",
+    "conversation_config": { "agent": { "prompt": { "knowledge_base": [
+      { "type": "text", "id": "kb_old_hours", "name": "hours" },
+      { "type": "text", "id": "kb_old_faq", "name": "faq" }
+    ] } } }
+  },
+  "createKbText": [
+    { "id": "kb_new_hours", "name": "hours" },
+    { "id": "kb_new_services", "name": "services" }
+  ],
+  "createPhoneNumber": { "phone_number_id": "phnum_01" },
+  "updatePhoneNumber": { "phone_number_id": "phnum_01", "agent_id": "agent_dup_01" },
+  "sipOutboundCall": { "success": true, "message": "Call initiated", "conversation_id": "conv_smoke_01", "sip_call_id": "sip_01" },
+  "sipOutboundCallFailed": { "success": false, "message": "Number not reachable" },
+  "postCallTranscription": {
+    "type": "post_call_transcription",
+    "event_timestamp": 1800000000,
+    "data": {
+      "agent_id": "agent_dup_01",
+      "conversation_id": "conv_01",
+      "status": "done",
+      "transcript": [
+        { "role": "agent", "message": "Hi, this is Ava at Bright Smiles. How can I help?", "time_in_call_secs": 0 },
+        { "role": "user", "message": "Can I move my cleaning to Friday?", "time_in_call_secs": 4 }
+      ],
+      "metadata": { "start_time_unix_secs": 1799999940, "call_duration_secs": 58 },
+      "analysis": { "transcript_summary": "Caller asked to move a cleaning to Friday.", "call_successful": "success" }
+    }
+  },
+  "callInitiationFailure": {
+    "type": "call_initiation_failure",
+    "event_timestamp": 1800000000,
+    "data": { "agent_id": "agent_dup_01", "conversation_id": "conv_02", "failure_reason": "busy" }
+  }
+}
