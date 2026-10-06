@@ -34,6 +34,13 @@ export function isWithinHours(hours: BusinessHours, start: Date, end: Date): boo
   return hours.weekly.some((w) => w.day === s.weekday && hhmm(w.open) <= s.minutes && endMinutes <= hhmm(w.close));
 }
 
+/** True when the instant falls inside an opening window on its local day (and the date is not closed). */
+export function isOpenAt(hours: BusinessHours, at: Date): boolean {
+  const p = localParts(at, hours.timezone);
+  if (hours.closedDates?.includes(p.ymd)) return false;
+  return hours.weekly.some((w) => w.day === p.weekday && hhmm(w.open) <= p.minutes && p.minutes < hhmm(w.close));
+}
+
 /** Slot-lock instants covered by a booking. Each becomes one conditional write. */
 export function slotInstants(start: Date, durationMin: number, granularityMin = SLOT_GRANULARITY_MIN): string[] {
   if (start.getTime() % (granularityMin * MS_MIN) !== 0) throw new Error('start not aligned to slot granularity');
