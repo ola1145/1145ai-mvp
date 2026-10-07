@@ -11,6 +11,14 @@ import { lookupCaller } from '../src/handlers/lookup-caller.js';
 import { mintTenantToken } from '@1145/shared';
 import { MemoryRepo, SECRET, makeDeps, voiceEvent } from './fakes.js';
 
+// lib/rate-limit.ts takes its tenant-scoped clients from ddb-repo.ts (CR T6-1). The stand-in lets a test see which tenant a
+// client was asked for, and counts providers built the old way (a second AssumeRole cache of our own), which must stay at zero.
+const ddbRepo = vi.hoisted(() => ({ docFor: undefined as undefined | ((tid: string) => Promise<unknown>), providersBuilt: 0 }));
+vi.mock('../src/lib/ddb-repo.js', () => ({
+  tenantDocFor: (tid: string) => ddbRepo.docFor!(tid),
+  createTenantDocProvider: () => { ddbRepo.providersBuilt++; return (tid: string) => ddbRepo.docFor!(tid); },
+}));
+
 // ---- fakes ---------------------------------------------------------------------------------------------------------
 
 const tick = async () => { await Promise.resolve(); await Promise.resolve(); };
@@ -367,6 +375,138 @@ describe('guard in handle()', () => {
   });
 });
 
+// ---- ToolLatencyMs (CR P7-2) -----------------------------------------------------------------------------------------
+
+describe('tool latency metric', () => {
+  const metricLines = () => {
+    const lines: Array<Record<string, any>> = []; // eslint-disable-line @typescript-eslint/no-explicit-any
+    return { lines, sink: (l: Record<string, unknown>) => { lines.push(l); } };
+  };
+  /** A clock that moves 42 ms between the two readings handle() takes around the handler. */
+  const clock42 = () => { let t = 1000; return () => { const v = t; t += 42; return v; }; };
+
+  it('publishes one ToolLatencyMs per handled request, as an embedded metric under the Route dimension', async () => {
+    const { lines, sink } = metricLines();
+    const h = handle(async () => json(200, { ok: true }), { guard: false, route: 'check-availability', metrics: sink, now: clock42() });
+    await h(voiceEvent({}));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      Route: 'check-availability', ToolLatencyMs: 42, status: 200,
+      _aws: { CloudWatchMetrics: [{ Namespace: 'Ai1145', Dimensions: [['Route']], Metrics: [{ Name: 'ToolLatencyMs', Unit: 'Milliseconds' }] }] },
+    });
+    expect(typeof lines[0]!._aws.Timestamp).toBe('number');
+  });
+
+  it('measures failures too: a thrown HttpError, a returned 4xx and a crash', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { lines, sink } = metricLines();
+    const opts = { guard: false as const, route: 'create-booking', metrics: sink, now: clock42() };
+    await handle(async () => { throw new HttpError(409, 'slot_taken', 'taken'); }, opts)(voiceEvent({}));
+    await handle(async () => json(404, { code: 'unknown_service' }), opts)(voiceEvent({}));
+    await handle(async () => { throw new Error('boom'); }, opts)(voiceEvent({}));
+    err.mockRestore();
+    expect(lines.map((l) => [l.status, l.ToolLatencyMs])).toEqual([[409, 42], [404, 42], [500, 42]]);
+  });
+
+  it('does not count a request the guard refused, so a flood of 429s cannot drag the p95 down', async () => {
+    const { lines, sink } = metricLines();
+    const guard: RequestGuard = { check: async () => ({ allow: false, response: json(429, { code: 'rate_limited' }) }) };
+    expect((await handle(async () => json(200, {}), { guard, route: 'create-booking', metrics: sink })(voiceEvent({}))).statusCode).toBe(429);
+    expect(lines).toEqual([]);
+  });
+
+  it('measures only the handler, not the guard in front of it', async () => {
+    const { lines, sink } = metricLines();
+    let t = 0;
+    const now = () => t;
+    const guard: RequestGuard = { check: async () => { t += 500; return { allow: true }; } };
+    await handle(async () => { t += 30; return json(200, {}); }, { guard, route: 'take-message', metrics: sink, now })(voiceEvent({}));
+    expect(lines[0]!.ToolLatencyMs).toBe(30);
+  });
+
+  it('stays silent without a route name (local runs, tests), and takes the route from TOOL_API_ROUTE in Lambda', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await handle(async () => json(200, {}), { guard: false })(voiceEvent({}));
+    expect(log).not.toHaveBeenCalled();
+    process.env.TOOL_API_ROUTE = 'lookup-caller';
+    try {
+      await handle(async () => json(200, {}), { guard: false })(voiceEvent({}));
+    } finally { delete process.env.TOOL_API_ROUTE; }
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(log.mock.calls[0]![0] as string)).toMatchObject({ Route: 'lookup-caller', ToolLatencyMs: expect.any(Number) });
+    log.mockRestore();
+  });
+
+  it('refuses a route name that is not a plain handler name, so nothing odd becomes a metric dimension', async () => {
+    const { lines, sink } = metricLines();
+    for (const route of ['', 'Check Availability', 'a/b', 'x'.repeat(65), '{"a":1}']) {
+      await handle(async () => json(200, {}), { guard: false, route, metrics: sink })(voiceEvent({}));
+    }
+    expect(lines).toEqual([]);
+  });
+
+  it('never fails the request because the metric could not be written', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const h = handle(async () => json(200, { ok: true }), { guard: false, route: 'check-availability', metrics: () => { throw new Error('stdout closed'); } });
+    expect((await h(voiceEvent({}))).statusCode).toBe(200);
+    err.mockRestore();
+  });
+
+  it('can be switched off per handler', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await handle(async () => json(200, {}), { guard: false, route: 'check-availability', metrics: false })(voiceEvent({}));
+    expect(log).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  it('carries the verified call id the guard learned, so the trace-one-call query finds the line', async () => {
+    const { lines, sink } = metricLines();
+    const guard: RequestGuard = { check: async () => ({ allow: true, callId: 'room-77' }) };
+    await handle(async () => json(200, {}), { guard, route: 'check-availability', metrics: sink })(voiceEvent({}));
+    expect(lines[0]).toMatchObject({ callId: 'room-77' });
+  });
+
+  it('puts the call id on the crash log line too', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const guard: RequestGuard = { check: async () => ({ allow: true, callId: 'room-77' }) };
+    await handle(async () => { throw new Error('boom'); }, { guard, metrics: false })(voiceEvent({}));
+    expect(JSON.parse(err.mock.calls[0]![0] as string)).toMatchObject({ level: 'error', requestId: 'req-1', callId: 'room-77' });
+    err.mockRestore();
+  });
+
+  it('holds no tenant, caller number or request content', async () => {
+    const { lines, sink } = metricLines();
+    await handle(async () => json(200, {}), { guard: false, route: 'create-booking', metrics: sink })(voiceEvent({ customer: { name: 'Dana Rivera' } }, { caller: '+12145550123' }));
+    const text = JSON.stringify(lines);
+    expect(text).not.toContain('2145550123');
+    expect(text).not.toContain('Dana');
+    expect(text).not.toContain('t_tenanta01');
+  });
+});
+
+describe('what the guard tells handle() about the call', () => {
+  it('gives the call id from the verified token, the ElevenAgents conversation id, and nothing for the dashboard', async () => {
+    const { guard } = rig();
+    expect(await guard.check(voiceEvent({}))).toMatchObject({ allow: true, callId: 'call-1' });
+    expect(await guard.check({
+      headers: { 'x-1145-engine-secret': 'engine-secret', 'x-1145-engine-agent-id': 'agent_A', 'x-1145-conversation-id': 'conv_9' },
+      requestContext: { requestId: 'r' },
+    })).toMatchObject({ allow: true, callId: 'conv_9' });
+    const dash = await guard.check({
+      headers: {}, requestContext: { requestId: 'r', authorizer: { jwt: { claims: { 'custom:tenant_id': 't_tenanta01', 'custom:role': 'owner' } } } },
+    });
+    expect(dash).toMatchObject({ allow: true });
+    expect((dash as { callId?: string }).callId).toBeUndefined();
+  });
+
+  it('puts the call id on its throttle log line', async () => {
+    const { ok, logs } = rig({ policies: { 'customer-agent': { capacity: 1, refillPerSec: 0.001 } } });
+    await ok(voiceEvent({}));
+    await ok(voiceEvent({}));
+    expect(logs[0]).toMatchObject({ msg: 'rate limited', callId: 'call-1' });
+  });
+});
+
 describe('the 429', () => {
   it('is a 429 with a retry time and a natural line for a customer-facing agent', async () => {
     const { ok, calls } = rig({ policies: { 'customer-agent': { capacity: 1, refillPerSec: 0.5 } } });
@@ -382,7 +522,7 @@ describe('the 429', () => {
 
   it('speaks differently to owners and staff than to callers', async () => {
     const { ok } = rig({ policies: { owner: { capacity: 1, refillPerSec: 0.5 } } });
-    const claims = { 'custom:tenant_id': 't_tenanta01' };
+    const claims = { 'custom:tenant_id': 't_tenanta01', 'custom:role': 'owner' };
     const ev: HttpEvent = { headers: {}, requestContext: { requestId: 'r', authorizer: { jwt: { claims } } } };
     await ok(ev);
     const r = await ok(ev);
@@ -421,10 +561,10 @@ describe('who gets charged', () => {
 
   it('charges the Cognito tenant for dashboard calls, as owner or staff', async () => {
     const { ok, store } = rig();
-    const dash = (role?: string): HttpEvent => ({
-      headers: {}, requestContext: { requestId: 'r', authorizer: { jwt: { claims: { 'custom:tenant_id': 't_tenantb02', ...(role ? { 'custom:role': role } : {}) } } } },
+    const dash = (role: string): HttpEvent => ({
+      headers: {}, requestContext: { requestId: 'r', authorizer: { jwt: { claims: { 'custom:tenant_id': 't_tenantb02', 'custom:role': role } } } },
     });
-    await ok(dash());
+    await ok(dash('owner'));
     await ok(dash('staff'));
     expect(store.keys().sort()).toEqual(['t_tenantb02|RATE#owner', 't_tenantb02|RATE#staff']);
   });
@@ -465,7 +605,7 @@ describe('who gets charged', () => {
     for (let i = 0; i < 10; i++) statuses.push((await ok(voiceEvent({}, { tid: 't_tenanta01' }))).statusCode);
     expect(statuses).toEqual([200, 200, 200, 429, 429, 429, 429, 429, 429, 429]);
     expect((await ok(voiceEvent({}, { tid: 't_tenantb02' }))).statusCode).toBe(200);
-    const owner: HttpEvent = { headers: {}, requestContext: { requestId: 'r', authorizer: { jwt: { claims: { 'custom:tenant_id': 't_tenanta01' } } } } };
+    const owner: HttpEvent = { headers: {}, requestContext: { requestId: 'r', authorizer: { jwt: { claims: { 'custom:tenant_id': 't_tenanta01', 'custom:role': 'owner' } } } } };
     expect((await ok(owner)).statusCode).toBe(200);
   });
 
@@ -638,6 +778,18 @@ describe('prodRequestGuard', () => {
     expect(new Set(asked)).toEqual(new Set(['t_tenanta01'])); // only ever the verified tenant's client
     expect(ddb.sent.find((s) => s.op === 'Put')!.input.TableName).toBe('tbl');
     expect(header(voiceEvent({}), 'authorization')).toBeTruthy();
+  });
+  it('takes its tenant-scoped clients from ddb-repo, so a warm container assumes the tenant role once, not twice (CR T6-1)', async () => {
+    const ddb = new FakeDdb();
+    const asked: string[] = [];
+    ddbRepo.docFor = async (tid) => { asked.push(tid); return scopedDoc(ddb)(tid); };
+    ddbRepo.providersBuilt = 0;
+    const { deps } = makeDeps({});
+    const guard = prodRequestGuard({ TENANT_DATA_ROLE_ARN: 'arn:aws:iam::1:role/x', TABLE_NAME: 'tbl' }, { auth: async () => deps })!;
+    expect((await handle(async () => json(200, {}), { guard })(voiceEvent({}))).statusCode).toBe(200);
+    expect(new Set(asked)).toEqual(new Set(['t_tenanta01']));
+    expect(ddb.sent.some((s) => s.op === 'Put')).toBe(true);
+    expect(ddbRepo.providersBuilt).toBe(0);
   });
   it('has a policy for every principal that can reach the tool API', () => {
     for (const p of ['customer-agent', 'admin-agent', 'owner', 'staff'] as const) {

@@ -36,7 +36,14 @@ export function header(event: HttpEvent, name: string): string | undefined {
 export interface GuardOutcome { status: number; code?: string }
 
 export type GuardDecision =
-  | { allow: true; /** Called once the handler has answered. A failure here never changes the response. */ settled?: (outcome: GuardOutcome) => Promise<void> }
+  | {
+      allow: true;
+      /** The call, room or conversation id the guard verified (never read from the body). Goes on this request's log lines so
+       *  the saved trace-one-call query finds them. */
+      callId?: string;
+      /** Called once the handler has answered. A failure here never changes the response. */
+      settled?: (outcome: GuardOutcome) => Promise<void>;
+    }
   | { allow: false; response: HttpResult };
 
 /** Runs before every handler. The rate limiter (lib/rate-limit.ts) is one; handle() knows nothing about what it checks. */
@@ -45,7 +52,33 @@ export interface RequestGuard { check(event: HttpEvent): Promise<GuardDecision> 
 export interface HandleOptions {
   /** Use this guard instead of the process-wide one; `false` turns guarding off for this handler. */
   guard?: RequestGuard | false;
+  /** The `Route` dimension of the ToolLatencyMs metric: the handler file name. Defaults to TOOL_API_ROUTE, which api-stack.ts
+   *  sets on every function. With no (valid) route nothing is published. */
+  route?: string;
+  /** Where metric lines go. Default: one JSON line on stdout, which CloudWatch reads as an embedded metric (EMF); no SDK, no
+   *  IAM. `false` publishes nothing. */
+  metrics?: ((line: Record<string, unknown>) => void) | false;
+  /** Milliseconds, monotonic. Test seam; defaults to performance.now. */
+  now?: () => number;
 }
+
+const ROUTE_NAME = /^[a-z0-9-]{1,64}$/;
+
+/** One CloudWatch embedded-metric line (CR P7-2): `ToolLatencyMs` under `Ai1145`, dimension `Route`. Everything else on the
+ *  line is a plain log field. Holds no tenant, caller number or request content. */
+export function toolLatencyMetric(route: string, latencyMs: number, fields: Record<string, unknown>, atMs: number = Date.now()): Record<string, unknown> {
+  return {
+    _aws: {
+      Timestamp: atMs,
+      CloudWatchMetrics: [{ Namespace: 'Ai1145', Dimensions: [['Route']], Metrics: [{ Name: 'ToolLatencyMs', Unit: 'Milliseconds' }] }],
+    },
+    Route: route,
+    ToolLatencyMs: Math.max(0, Math.round(latencyMs * 100) / 100),
+    ...fields,
+  };
+}
+
+const stdoutMetric = (line: Record<string, unknown>) => console.log(JSON.stringify(line));
 
 let installed: RequestGuard | false | undefined;
 let lazyDefault: Promise<RequestGuard | undefined> | undefined;
@@ -80,6 +113,19 @@ function codeOf(result: HttpResult): string | undefined {
   } catch { return undefined; }
 }
 
+/** Publish ToolLatencyMs for a request the handler ran for, whether it succeeded or failed. Never throws: a metric must not
+ *  be what fails a call. A request the guard refused (429) never gets here, so a flood cannot pull the p95 down. */
+function publishLatency(opts: HandleOptions, latencyMs: number, requestId: string | undefined, status: number, callId: string | undefined): void {
+  if (opts.metrics === false) return;
+  const route = opts.route ?? process.env.TOOL_API_ROUTE;
+  if (!route || !ROUTE_NAME.test(route)) return;
+  try {
+    (opts.metrics ?? stdoutMetric)(toolLatencyMetric(route, latencyMs, { status, ...(requestId ? { requestId } : {}), ...(callId ? { callId: callId.slice(0, 128) } : {}) }));
+  } catch (err) {
+    console.error(JSON.stringify({ level: 'error', requestId, msg: 'could not publish the latency metric', err: String(err) }));
+  }
+}
+
 /**
  * Wrap a handler: guard first (rate limits; a 429 means the handler never runs), then the handler. HttpError becomes JSON,
  * stack traces never leak, and voice paths always get a caller-safe line. A guard that breaks lets the request through:
@@ -98,6 +144,9 @@ export function handle(fn: (e: HttpEvent) => Promise<HttpResult>, opts: HandleOp
       if (decision && !decision.allow) return decision.response;
     }
 
+    const callId = decision?.allow ? decision.callId : undefined;
+    const clock = opts.now ?? (() => performance.now());
+    const started = clock();
     let result: HttpResult;
     let code: string | undefined;
     try {
@@ -108,7 +157,7 @@ export function handle(fn: (e: HttpEvent) => Promise<HttpResult>, opts: HandleOp
         code = err.code;
         result = json(err.status, { code: err.code, message: err.message, sayToCaller: err.sayToCaller });
       } else {
-        console.error(JSON.stringify({ level: 'error', requestId: event.requestContext?.requestId, err: String(err) }));
+        console.error(JSON.stringify({ level: 'error', requestId: event.requestContext?.requestId, ...(callId ? { callId } : {}), err: String(err) }));
         code = 'internal';
         result = json(500, {
           code: 'internal', message: 'internal error',
@@ -116,6 +165,7 @@ export function handle(fn: (e: HttpEvent) => Promise<HttpResult>, opts: HandleOp
         });
       }
     }
+    publishLatency(opts, clock() - started, event.requestContext?.requestId, result.statusCode, callId);
 
     if (decision?.allow && decision.settled) {
       try {

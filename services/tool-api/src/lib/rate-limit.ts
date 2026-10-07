@@ -344,8 +344,13 @@ export function createRequestGuard(cfg: GuardConfig): RequestGuard {
 
   async function decide(event: HttpEvent): Promise<GuardDecision> {
     const ctx = await identify(event);
-    const policy = ctx && policies[ctx.principal];
-    if (!ctx || !policy) return ALLOW;
+    if (!ctx) return ALLOW;
+    // The call, room or conversation this request belongs to, from the verified token or the engine's conversation header.
+    // Dashboard requests belong to no call.
+    const callId = ctx.callId ?? (ctx.channel === 'voice' || ctx.channel === 'webchat' ? ctx.correlationId : undefined);
+    const known: GuardDecision = callId ? { allow: true, callId } : ALLOW;
+    const policy = policies[ctx.principal];
+    if (!policy) return known;
 
     const requestId = event.requestContext?.requestId;
     // Only the customer-facing agent has to verify callers, so only it is held back by the miss lock.
@@ -356,20 +361,21 @@ export function createRequestGuard(cfg: GuardConfig): RequestGuard {
     ]);
 
     if (!bucket.allowed) {
-      log({ level: 'warn', msg: 'rate limited', requestId, tenantId: ctx.tenantId, principal: ctx.principal, retryAfterSec: bucket.retryAfterSec });
+      log({ level: 'warn', msg: 'rate limited', requestId, ...(callId ? { callId } : {}), tenantId: ctx.tenantId, principal: ctx.principal, retryAfterSec: bucket.retryAfterSec });
       return {
         allow: false,
         response: tooMany(ctx.principal === 'customer-agent' ? 'customer' : 'owner', 'rate_limited', 'too many requests', bucket.retryAfterSec),
       };
     }
     if (lock?.locked) {
-      log({ level: 'warn', msg: 'verification locked', requestId, tenantId: ctx.tenantId, principal: ctx.principal, retryAfterSec: lock.retryAfterSec });
+      log({ level: 'warn', msg: 'verification locked', requestId, ...(callId ? { callId } : {}), tenantId: ctx.tenantId, principal: ctx.principal, retryAfterSec: lock.retryAfterSec });
       return { allow: false, response: tooMany('verification', 'verification_throttled', 'too many failed verification attempts', lock.retryAfterSec) };
     }
 
-    if (ctx.principal !== 'customer-agent') return ALLOW;
+    if (ctx.principal !== 'customer-agent') return known;
     return {
       allow: true,
+      ...(callId ? { callId } : {}),
       settled: async (outcome: GuardOutcome) => {
         if (!outcome.code || !(VERIFICATION_FAILURE_CODES as readonly string[]).includes(outcome.code)) return;
         try {
@@ -408,34 +414,12 @@ export interface GuardWiring {
 }
 
 /**
- * ABAC-scoped DynamoDB clients, the same way lib/ddb-repo.ts builds them (createTenantDocProvider is its export).
- * TODO(CR T6-1): ddb-repo.ts keeps its provider private, so this builds a second one and a cold container pays one more
- * AssumeRole per tenant. Once T0 exports it, replace this function with that export.
+ * ABAC-scoped DynamoDB clients: the very provider ddbRepoFor uses (CR T6-1), so a warm container assumes the tenant role
+ * once per tenant, not once for the tools and again for the limiter. Imported on first use, so a handler that never
+ * reaches the limiter never loads it.
  */
-function prodDocFor(roleArn: string): (tenantId: string) => Promise<DocLike> {
-  let provider: Promise<(tenantId: string) => Promise<DocLike>> | undefined;
-  return async (tenantId) => {
-    provider ??= (async () => {
-      const [{ createTenantDocProvider }, { AssumeRoleCommand, STSClient }, { DynamoDBClient }, { DynamoDBDocumentClient }] = await Promise.all([
-        import('./ddb-repo.js'), import('@aws-sdk/client-sts'), import('@aws-sdk/client-dynamodb'), import('@aws-sdk/lib-dynamodb'),
-      ]);
-      const sts = new STSClient({});
-      return createTenantDocProvider({
-        assumeRole: async (tid) => {
-          const r = await sts.send(new AssumeRoleCommand({
-            RoleArn: roleArn, RoleSessionName: `tenant-${tid}`.slice(0, 64), DurationSeconds: 900, // 900 s is the STS minimum
-            Tags: [{ Key: 'tenant_id', Value: tid }],
-          }));
-          const c = r.Credentials;
-          if (!c?.AccessKeyId || !c.SecretAccessKey || !c.SessionToken || !c.Expiration) throw new Error('assume role failed');
-          return { accessKeyId: c.AccessKeyId, secretAccessKey: c.SecretAccessKey, sessionToken: c.SessionToken, expiration: c.Expiration };
-        },
-        makeDoc: (c) => DynamoDBDocumentClient.from(new DynamoDBClient({ credentials: c }), { marshallOptions: { removeUndefinedValues: true } }),
-      });
-    })();
-    return (await provider)(tenantId);
-  };
-}
+const prodDocFor = (): ((tenantId: string) => Promise<DocLike>) =>
+  async (tenantId) => (await import('./ddb-repo.js')).tenantDocFor(tenantId);
 
 /**
  * The guard every tool API Lambda runs with. It switches itself on when the function has the tenant data role (every
@@ -445,7 +429,7 @@ export function prodRequestGuard(env: Record<string, string | undefined> = proce
   if (env.RATE_LIMIT_DISABLED === '1') return undefined;
   const roleArn = env.TENANT_DATA_ROLE_ARN;
   if (!roleArn && !wiring.docFor) return undefined;
-  const docFor = wiring.docFor ?? prodDocFor(roleArn as string);
+  const docFor = wiring.docFor ?? prodDocFor();
   const auth = wiring.auth ?? (async () => (await import('../deps.js')).prodDeps());
   return createRequestGuard({ limiter: createLimiter({ store: ddbBucketStore(docFor, env.TABLE_NAME ?? 't1145') }), auth });
 }
