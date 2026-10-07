@@ -15,10 +15,16 @@
  *  - A tenant with no Stripe customer yet (a trial) is skipped, not billed and not an error.
  *  - Billable seconds are reported as the meter value; the included minutes and the per-minute price live in the
  *    Stripe price (tiered), not in this code.
+ *  - The Stripe key is read from Secrets Manager (`STRIPE_SECRET_ID`) the first time a tenant with a Stripe customer is
+ *    billed, never for a trial, and is kept for the warm container. A missing, unreadable or live key throws, so the
+ *    event is retried and parks in the dead-letter queue instead of a call going quietly unbilled.
+ *
+ * Entry point for the post-call Lambda: `createStripeUsage(env)`, found by name by deps.ts (contracts/CHANGE_REQUESTS/G3-1.md).
  */
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import Stripe from 'stripe';
 import { asTenantId, keys, type TenantId } from '@1145/shared';
+import type { G2Env } from './deps.js';
 import { MAX_CALL_SECONDS, assertCallId, guardTtl, isConditionalFailure, replayGuardSk, toDate, type TenantDocProvider } from './usage-store.js';
 
 /** `event_name` of the Stripe billing meter that sums billable seconds (payload key `value`, customer key `stripe_customer_id`). */
@@ -199,10 +205,85 @@ export async function reportStripeUsage(input: StripeUsageInput, deps: StripeUsa
   return { status: 'reported', meterEventId: sent.id };
 }
 
+// ───────────────────────────── the Lambda's Stripe port ─────────────────────────────
+
+/** The one thing a Stripe secret may hold that this module uses: the key, as JSON `{ "STRIPE_SECRET_KEY": "sk_test_..." }` or bare. */
+export function readStripeKey(secretString: string | undefined): string {
+  const text = secretString?.trim() ?? '';
+  let key: unknown = text;
+  if (text.startsWith('{')) {
+    try {
+      key = (JSON.parse(text) as { STRIPE_SECRET_KEY?: unknown }).STRIPE_SECRET_KEY;
+    } catch {
+      key = undefined;
+    }
+  }
+  // Never echo what was read: a wrong secret may be some other credential.
+  if (typeof key !== 'string' || !/^(?:sk|rk)_(?:test|live)_\S+$/.test(key.trim())) {
+    throw new Error('the Stripe secret holds no Stripe key (expected STRIPE_SECRET_KEY as an sk_test_ or rk_test_ key)');
+  }
+  return key.trim();
+}
+
+/** Test seams. Production leaves them out: the key comes from Secrets Manager and the client is the real Stripe SDK. */
+export interface StripeUsageSeams {
+  /** A ready client. Skips the secret entirely. */
+  stripe?: StripeUsageClient;
+  /** Returns the secret string for a Secrets Manager id. */
+  readSecret?: (secretId: string) => Promise<string | undefined>;
+  /** Builds a client from a key that already passed the test-mode check. */
+  newStripeClient?: (key: string) => StripeUsageClient;
+  /** Loads an SDK package by name. */
+  loadSdk?: (name: string) => Promise<unknown>;
+}
+
+interface SecretsManagerSdk {
+  SecretsManagerClient: new (config: object) => { send(command: unknown): Promise<{ SecretString?: string }> };
+  GetSecretValueCommand: new (input: { SecretId: string }) => unknown;
+}
+
 /**
- * Binds the call and its end time from the event; the tenant comes from the handler's argument (the envelope's tenant id).
- * Call it right after the usage counter, with the same billable seconds.
+ * Reads a secret with the SDK client the Lambda runtime already provides. It is loaded by name at the moment it is first
+ * needed because services/post-call/package.json does not list it yet (contracts/CHANGE_REQUESTS/G2-4.md asks P3 to);
+ * the nodejs22 runtime ships every `@aws-sdk/*` v3 client and the bundle leaves `@aws-sdk/*` external.
  */
-export function makeReportStripeUsage(callId: string, at: Date | string, deps: StripeUsageDeps) {
-  return (tenantId: string, billableSeconds: number): Promise<StripeUsageResult> => reportStripeUsage({ tenantId, callId, billableSeconds, at }, deps);
+function secretsManagerReader(loadSdk: (name: string) => Promise<unknown>): (secretId: string) => Promise<string | undefined> {
+  return async (secretId) => {
+    const sdk = (await loadSdk('@aws-sdk/client-secrets-manager')) as SecretsManagerSdk;
+    const out = await new sdk.SecretsManagerClient({}).send(new sdk.GetSecretValueCommand({ SecretId: secretId }));
+    return out.SecretString;
+  };
+}
+
+/**
+ * The Lambda's Stripe port (G3-1). Built once per warm container from the environment deps.ts hands every G2 factory.
+ * `reportUsage` is safe to repeat for one call id: the call id is Stripe's idempotency key and a guard item remembers
+ * what was sent. `at` is the event's `occurredAt` (clamped into the window Stripe accepts).
+ */
+export function createStripeUsage(env: G2Env & StripeUsageSeams): {
+  reportUsage(tenantId: string, callId: string, seconds: number, at?: Date | string): Promise<void>;
+} {
+  const billing = createDdbBillingStore({ docFor: () => env.db, table: env.table, now: () => env.now().getTime() });
+  const readSecret = env.readSecret ?? secretsManagerReader(env.loadSdk ?? ((name) => import(name)));
+  let client: Promise<StripeUsageClient> | undefined;
+  const build = async (): Promise<StripeUsageClient> => {
+    if (env.stripe) return env.stripe;
+    if (!env.stripeSecretId) throw new Error('STRIPE_SECRET_ID is not set: cannot read the Stripe key');
+    const key = readStripeKey(await readSecret(env.stripeSecretId));
+    assertStripeTestKey(key);
+    return env.newStripeClient ? env.newStripeClient(key) : createStripeUsageClient(key);
+  };
+  // Built on the first real report, so a trial tenant never touches the secret. A failure is not kept: the retry tries again.
+  const lazy: StripeUsageClient = {
+    reportSeconds: async (input) => {
+      const pending = (client ??= build().catch((e: unknown) => { client = undefined; throw e; }));
+      return (await pending).reportSeconds(input);
+    },
+  };
+  const deps: StripeUsageDeps = { stripe: lazy, customers: billing, ledger: billing, now: env.now };
+  return {
+    async reportUsage(tenantId, callId, seconds, at) {
+      await reportStripeUsage({ tenantId, callId, billableSeconds: seconds, at: at ?? env.now() }, deps);
+    },
+  };
 }

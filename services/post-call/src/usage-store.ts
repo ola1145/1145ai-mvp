@@ -11,16 +11,22 @@
  *    `tenant.state_changed`. The profile flip is conditional, so exactly one caller wins and emits. Routes move first and
  *    the move is idempotent, so a replay repairs a half-finished flip. A suspension is never overridden by the cap.
  *  - The tenant id is the one on the event envelope. It is validated here and used for every key; nothing read from the
- *    transcript, the analysis or the request body can change it. Tenant data goes through `docFor(tenantId)`, which in
- *    production is the ABAC-scoped client (ADR-0003); only the route items use the separate `routeDoc`.
+ *    transcript, the analysis or the request body can change it. Tenant data goes through `docFor(tenantId)`; only the
+ *    route items use the separate `routeDoc`. The Lambda has one client and one role, which IAM limits to TENANT# keys
+ *    plus UpdateItem on NUMBER# (infra/cdk/lib/postcall-stack.ts), so `createUsageStore` hands that client to both.
+ *
+ * Entry point for the post-call Lambda: `createUsageStore(env)`, found by name by deps.ts (contracts/CHANGE_REQUESTS/G3-1.md).
  */
 import { GetCommand, TransactWriteCommand, UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { asTenantId, keys, makeEvent, type EventEnvelope, type TenantId, type TenantRuntimeState } from '@1145/shared';
-import type { PostCallDeps } from './handler.js';
+import type { G2Env } from './deps.js';
 import { capState } from './usage.js';
 
-/** Returns a DynamoDB client allowed to touch `TENANT#<tenantId>` only. Production: the AssumeRole-with-tag client. */
-export type TenantDocProvider = (tenantId: string) => DynamoDBDocumentClient | Promise<DynamoDBDocumentClient>;
+/** What the stores need of a DynamoDB document client: `send`. */
+export type DocClient = Pick<DynamoDBDocumentClient, 'send'>;
+
+/** Returns a DynamoDB client allowed to touch `TENANT#<tenantId>`. Tests: a fake scoped to the tenant. Lambda: its own client. */
+export type TenantDocProvider = (tenantId: string) => DocClient | Promise<DocClient>;
 
 /** Seconds a tenant may use per month when its profile carries no `capSec`: the 30 free minutes of a trial. */
 export const DEFAULT_CAP_SEC = 30 * 60;
@@ -88,7 +94,7 @@ export interface UsageStore {
 export interface DdbUsageStoreConfig {
   docFor: TenantDocProvider;
   /** Client allowed to update NUMBER# route items (they sit outside every tenant's partition). */
-  routeDoc: DynamoDBDocumentClient;
+  routeDoc: DocClient;
   table: string;
   now?: () => number;
 }
@@ -269,9 +275,15 @@ export async function recordCallUsage(input: RecordUsageInput, deps: UsageDeps):
 }
 
 /**
- * Adapter for PostCallDeps.addUsage: binds the call and its end time from the event. The tenant comes from the
- * handler's argument, which is the envelope's tenant id.
+ * The Lambda's usage port (G3-1). Built once per warm container from the environment deps.ts hands every G2 factory.
+ * `tenantId` is the envelope's, `callId` the event's, and `at` the event's `occurredAt`: the month the call is filed
+ * under, the same on every replay. `at` is optional only so a caller that cannot pass it still works; it then falls
+ * back to the env clock.
  */
-export function makeAddUsage(callId: string, at: Date | string, deps: UsageDeps): PostCallDeps['addUsage'] {
-  return (tenantId, seconds) => recordCallUsage({ tenantId, callId, seconds, at }, deps);
+export function createUsageStore(env: G2Env): {
+  addUsage(tenantId: string, callId: string, seconds: number, at?: Date | string): Promise<RecordUsageResult>;
+} {
+  const store = createDdbUsageStore({ docFor: () => env.db, routeDoc: env.db, table: env.table, now: () => env.now().getTime() });
+  const deps: UsageDeps = { store, publish: env.publish, now: env.now };
+  return { addUsage: (tenantId, callId, seconds, at) => recordCallUsage({ tenantId, callId, seconds, at: at ?? env.now() }, deps) };
 }
