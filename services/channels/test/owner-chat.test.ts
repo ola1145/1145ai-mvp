@@ -40,7 +40,8 @@ const depsFor = (queue: SqsLike, timeoutMs?: number): OwnerChatDeps => ({
 });
 
 /** An API Gateway HTTP API (payload v2) event with a Cognito JWT authorizer. */
-function post(body: unknown, claims: Record<string, unknown> | undefined = { sub: SUB }, over: Partial<OwnerChatEvent> = {}): OwnerChatEvent {
+/** claims: null means the request carries no authorizer at all (undefined would pick the default). */
+function post(body: unknown, claims: Record<string, unknown> | null = { sub: SUB }, over: Partial<OwnerChatEvent> = {}): OwnerChatEvent {
   return {
     headers: { 'content-type': 'application/json' },
     body: typeof body === 'string' ? body : JSON.stringify(body),
@@ -70,7 +71,7 @@ describe('identity: the Cognito sub from the authorizer, never the body', () => 
   });
 
   it.each([
-    ['no authorizer at all', undefined],
+    ['no authorizer at all', null],
     ['claims without a sub', { email: 'kemi@example.com' }],
     ['an empty sub', { sub: '' }],
     ['a sub that is not a string', { sub: 12345 }],
@@ -79,7 +80,7 @@ describe('identity: the Cognito sub from the authorizer, never the body', () => 
     ['a sub with a wildcard', { sub: '*' }],
   ])('fails closed with 401 when the request has %s', async (_name, claims) => {
     const q = new FakeFifoQueue();
-    const res = await ownerChat(post(ok({ sub: SUB }), claims as Record<string, unknown> | undefined), depsFor(q));
+    const res = await ownerChat(post(ok({ sub: SUB }), claims), depsFor(q));
     expect(res.statusCode).toBe(401);
     expect(parse(res)).toMatchObject({ code: 'unauthorized' });
     expect(q.calls).toHaveLength(0);
@@ -87,7 +88,7 @@ describe('identity: the Cognito sub from the authorizer, never the body', () => 
 
   it('does not read identity from headers or the query string', async () => {
     const q = new FakeFifoQueue();
-    const event = post(ok(), undefined, {
+    const event = post(ok(), null, {
       headers: { 'x-1145-sub': SUB, 'x-amzn-oidc-identity': SUB, authorization: 'Bearer abc' },
       queryStringParameters: { sub: SUB },
     } as Partial<OwnerChatEvent>);
@@ -356,7 +357,7 @@ describe('when the queue is not there', () => {
     const res = await ownerChat(post(ok()), { enqueue: async () => { throw new TypeError('x'); }, now: () => { throw new Error('clock broke'); } });
     expect(res.statusCode).toBe(500);
     expect(parse(res)).toMatchObject({ code: 'internal' });
-    expect(res.body).not.toMatch(/clock broke|TypeError|at \w+/);
+    expect(res.body).not.toMatch(/clock broke|TypeError|\.ts|\bat\s+\S+\s*\(/);
   });
 
   it('the Lambda entry point answers 500 instead of crashing when QUEUE_URL is not configured', async () => {
