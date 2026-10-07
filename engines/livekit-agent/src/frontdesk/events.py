@@ -2,6 +2,8 @@
 
 Rules this module keeps:
 - Envelopes match contracts/events/events.schema.json; correlationId is always the call id.
+- Phone numbers stay off the bus (call.started has only a masked caller). The verified caller ID goes into the
+  transcript object in S3 instead, tagged kind=transcript so it expires with the transcript (G2-3, SEC-35).
 - The transcript is in S3 before call.ended is published, so post-call can read `transcriptKey` straight away.
 - Nothing here ever blocks the audio path or raises into it: AWS calls run in worker threads, partials are
   best-effort, and failures are logged and degrade (call.ended goes out without a key rather than not at all).
@@ -17,6 +19,8 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from .sip import normalize_e164
+
 log = logging.getLogger("frontdesk.events")
 
 SOURCE = "1145.voice"
@@ -26,6 +30,11 @@ MAX_PARTIALS_IN_FLIGHT = 4
 RETRIES = 3  # after the first attempt
 BACKOFF_SEC = 0.2
 _ROLES = {"agent": "agent", "assistant": "agent", "caller": "caller", "user": "caller"}
+CHANNELS = {"voice", "webchat"}
+TRANSCRIPT_TAG = "kind=transcript"  # the 90-day lifecycle rule on the tenant bucket keys on this object tag (SEC-35)
+# Carriers that hide the caller ID often send a placeholder that looks like a number (the digits spell "anonymous",
+# "unavailable" and "restricted" on a phone keypad). Merging customers by it would join every hidden caller into one.
+WITHHELD_PLACEHOLDERS = frozenset({"+266696687", "+86282452253", "+7378742833"})
 
 
 def mask_phone(e164: str | None) -> str:
@@ -38,6 +47,12 @@ def mask_phone(e164: str | None) -> str:
     if len(digits) < 6:
         return "•••"
     return f"{digits[:2]}{'•' * max(0, len(digits) - 6)}{digits[-4:]}"
+
+
+def usable_caller_e164(raw: str | None) -> str | None:
+    """E.164 form of the caller's number, or None when it is missing, withheld or not a number."""
+    e164 = normalize_e164(raw)
+    return None if e164 is None or e164 in WITHHELD_PLACEHOLDERS else e164
 
 
 def transcript_key(tenant_id: str, call_id: str) -> str:
@@ -61,7 +76,11 @@ def _aws_client(service: str):
 
 class CallEvents:
     """Publishes call.started / transcript.partial / call.ended to EventBridge and stores the transcript in S3
-    at tenants/<tid>/transcripts/<callId>.json. Every event carries correlationId = call id."""
+    at tenants/<tid>/transcripts/<callId>.json. Every event carries correlationId = call id.
+
+    `caller_e164` is the carrier's caller ID from the verified SIP participant (never anything said on the call, never
+    web chat). It is written to the transcript object only, so the number stays off the event bus (CR G2-3 / G3-3).
+    The worker may assign it after construction, once the SIP participant is verified."""
 
     def __init__(
         self,
@@ -71,6 +90,7 @@ class CallEvents:
         *,
         engine: str = "livekit-telnyx",
         channel: str = "voice",
+        caller_e164: str | None = None,
         bus_name: str | None = None,
         bucket: str | None = None,
         events_client: Any = None,
@@ -80,6 +100,7 @@ class CallEvents:
     ):
         self.tenant_id, self.call_id, self.room_name = tenant_id, call_id, room_name
         self.engine, self.channel = engine, channel
+        self.caller_e164 = caller_e164
         self.turns: list[dict] = []
         self._bus = bus_name or os.environ.get("EVENT_BUS_NAME", "1145")
         self._bucket = bucket or os.environ.get("TENANT_BUCKET", "")
@@ -122,6 +143,8 @@ class CallEvents:
             "durationSec": max(0, int(duration_sec)),
             "endReason": end_reason if end_reason in END_REASONS else "error",
         }
+        if self.channel in CHANNELS:
+            data["channel"] = self.channel
         if key:
             data["transcriptKey"] = key
         await self._publish("call.ended", data, retries=RETRIES)
@@ -162,16 +185,17 @@ class CallEvents:
 
     async def _upload_transcript(self) -> str | None:
         key = transcript_key(self.tenant_id, self.call_id)
-        body = json.dumps(
-            {"callId": self.call_id, "tenantId": self.tenant_id, "roomName": self.room_name, "turns": self.turns},
-            ensure_ascii=False,
-        )
+        obj: dict[str, Any] = {"callId": self.call_id, "tenantId": self.tenant_id, "roomName": self.room_name}
+        if (caller := usable_caller_e164(self.caller_e164)) is not None:
+            obj["callerE164"] = caller
+        obj["turns"] = self.turns
+        body = json.dumps(obj, ensure_ascii=False)
 
         def put() -> None:
             if self._s3 is None:
                 self._s3 = _aws_client("s3")
             self._s3.put_object(Bucket=self._bucket, Key=key, Body=body.encode("utf-8"),
-                                ContentType="application/json", Tagging="kind=transcript")
+                                ContentType="application/json", Tagging=TRANSCRIPT_TAG)
 
         ok = await self._with_retries("S3 transcript upload", put, RETRIES)
         return key if ok else None

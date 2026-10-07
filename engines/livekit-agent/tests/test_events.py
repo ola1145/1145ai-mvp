@@ -5,6 +5,8 @@ import re
 import threading
 from pathlib import Path
 
+import pytest
+
 from frontdesk.events import CallEvents, mask_phone
 
 SCHEMA = json.loads((Path(__file__).parents[3] / "contracts/events/events.schema.json").read_text())
@@ -299,6 +301,85 @@ async def test_no_partials_after_ended():
     await ev.turn("caller", "too late", 3.0)
     await drain(ev)
     assert [t for t, _ in eb.details] == ["call.ended"]
+
+
+# ── G2-3 / G3-3: the caller's number goes into the transcript object, never onto the bus ─────────────────────────
+
+async def _ended_body(ev, s3):
+    await ev.ended(5, "caller_hangup")
+    return json.loads(s3.puts[0]["Body"])
+
+
+async def test_transcript_object_carries_the_verified_caller_number_next_to_the_call_id():
+    ev, eb, s3, *_ = make(caller_e164="+12145550123")
+    await ev.turn("caller", "Hi", 0.1)
+    body = await _ended_body(ev, s3)
+    assert body["callerE164"] == "+12145550123"
+    assert list(body)[:4] == ["callId", "tenantId", "roomName", "callerE164"] and body["turns"][0]["text"] == "Hi"
+    # events mask phone numbers by contract: the number must not reach the bus in any event
+    assert "2145550123" not in json.dumps(eb.details)
+
+
+async def test_caller_number_can_be_set_after_the_sip_participant_is_verified():
+    ev, _, s3, *_ = make()
+    ev.caller_e164 = "+12145550123"
+    assert (await _ended_body(ev, s3))["callerE164"] == "+12145550123"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("+1 (214) 555-0123", "+12145550123"),
+    ("2145550123", "+12145550123"),
+    ("sip:+12145550123@sip.telnyx.com", "+12145550123"),
+])
+async def test_caller_number_is_normalised_to_e164(raw, expected):
+    ev, _, s3, *_ = make(caller_e164=raw)
+    assert (await _ended_body(ev, s3))["callerE164"] == expected
+
+
+@pytest.mark.parametrize("raw", [
+    None, "", "anonymous", "Restricted", "unknown", "12", "not a number", "+0123456789",
+    "+266696687", "+86282452253", "+7378742833",   # what carriers send for anonymous / unavailable / restricted
+])
+async def test_caller_number_is_left_out_when_withheld_or_unusable(raw):
+    ev, _, s3, *_ = make(caller_e164=raw)
+    body = await _ended_body(ev, s3)
+    assert "callerE164" not in body
+    assert {"callId", "tenantId", "roomName", "turns"} <= set(body)
+
+
+async def test_caller_number_never_comes_from_what_was_said():
+    ev, _, s3, *_ = make()
+    await ev.turn("caller", "My number is +12145559999, call me back", 1.0)
+    assert "callerE164" not in await _ended_body(ev, s3)
+
+
+# ── SEC-35: transcript objects are tagged so the 90-day lifecycle rule finds them ───────────────────────────────
+
+async def test_every_upload_attempt_is_tagged_kind_transcript():
+    log = Log()
+    s3 = FakeS3(log, fail_times=2)
+    seen: list[str | None] = []
+    real = s3.put_object
+
+    def put_object(**kw):
+        seen.append(kw.get("Tagging"))
+        return real(**kw)
+
+    s3.put_object = put_object
+    ev, *_ = make(log=log, s3=s3)
+    await ev.ended(5, "caller_hangup")
+    assert seen == ["kind=transcript"] * 3 and len(s3.puts) == 1
+
+
+# ── call.ended names the channel so post-call scores web chat with the chat rules ───────────────────────────────
+
+@pytest.mark.parametrize("channel", ["voice", "webchat"])
+async def test_call_ended_carries_the_channel(channel):
+    ev, eb, *_ = make(channel=channel)
+    await ev.ended(5, "caller_hangup")
+    data = [d for t, d in eb.details if t == "call.ended"][0]["data"]
+    assert data["channel"] == channel
+    validate_data("call.ended", data)
 
 
 def test_mask_phone_matches_shared_helper():
