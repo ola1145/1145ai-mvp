@@ -10,8 +10,16 @@ id=$(gh api "repos/$REPO/rulesets" --jq '.[] | select(.name=="main-protection") 
 want=$(jq -r '.rules[]|select(.type=="required_status_checks").parameters.required_status_checks[].context' .github/rulesets/main.json | sort | tr '\n' ',')
 got=$(gh api "repos/$REPO/rulesets/$id" --jq '.rules[]|select(.type=="required_status_checks").parameters.required_status_checks[].context' | sort | tr '\n' ',')
 check "required checks" "$got" "$want"
+# CODEOWNERS only binds when the ruleset requires the code owner's review (SEC-01: /scripts/ci/, /orchestration/, /.github/).
+check "code owner review required" "$(gh api "repos/$REPO/rulesets/$id" --jq '[.rules[]|select(.type=="pull_request").parameters.require_code_owner_review]|first')" "true"
 check "prod environment has reviewers" "$(gh api "repos/$REPO/environments/prod" --jq '[.protection_rules[]?|select(.type=="required_reviewers")]|length>0')" "true"
+# The OIDC deploy roles trust repo:<repo>:environment:<env>; the environments must only be usable from main (SEC-34).
+for env in dev prod; do
+  check "$env deploys only from main (custom branch policies)" "$(gh api "repos/$REPO/environments/$env" --jq .deployment_branch_policy.custom_branch_policies)" "true"
+  check "$env branch policies" "$(gh api "repos/$REPO/environments/$env/deployment-branch-policies" --jq '[.branch_policies[].name]|sort|join(",")')" "main"
+done
+names=$(gh secret list --repo "$REPO" --json name --jq '.[].name')
 for s in CLAUDE_CODE_OAUTH_TOKEN AUTOMERGE_PAT; do
-  gh secret list --repo "$REPO" --json name --jq '.[].name' | grep -qx "$s" && echo "ok   secret $s" || { echo "FAIL secret $s missing"; fail=1; }
+  if grep -qx "$s" <<<"$names"; then echo "ok   secret $s"; else echo "FAIL secret $s missing"; fail=1; fi
 done
 exit $fail
