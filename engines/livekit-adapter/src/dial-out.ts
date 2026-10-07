@@ -25,8 +25,9 @@ export interface DialOutParams { roomName: string; to: E164; fromNumber: E164; t
  * 2. `SipClient.createSipParticipant` on the outbound trunk, FROM the tenant's own number.
  *
  * The worker decides the tenant the same way it does for inbound calls: from `sip.trunkPhoneNumber`, which LiveKit
- * sets to the number the call originates from on an outbound trunk. So nothing about the tenant goes into the dispatch
- * or the SIP call, and `fromNumber` must already route to `tenantId`, otherwise the call would run as someone else.
+ * documents as the number the call originates from on an outbound trunk (not yet confirmed on a real call: E8 spike).
+ * So nothing about the tenant goes into the dispatch or the SIP call, and `fromNumber` must already route to
+ * `tenantId`, otherwise the call would run as someone else.
  * Returns the SIP call id, which is the id the worker puts on every event of the call (`sip.callID`).
  */
 export async function dialOut(env: DialOutEnv, p: DialOutParams): Promise<string> {
