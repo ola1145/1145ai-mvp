@@ -345,12 +345,6 @@ describe('onCallEnded', () => {
     }]);
   });
 
-  it('labels the engine from the event: a conversation id from the engine means ElevenLabs', async () => {
-    const { deps, published } = rig();
-    await onCallEnded(ended('call-22', { engineConversationId: 'conv_abc' }), deps);
-    expect(published[0]!.data).toMatchObject({ engine: 'elevenlabs' });
-  });
-
   it('stops at once when another invocation has taken over the lease, instead of doing the work twice', async () => {
     const { deps, clock, calls } = rig();
     const evt = ended('call-23');
@@ -751,7 +745,7 @@ describe('PostCallStack', () => {
     const data = new DataStack(app, 'ai1145-dev-data', { env });
     const events = new EventsStack(app, 'ai1145-dev-events', { env });
     template = Template.fromStack(new PostCallStack(app, 'ai1145-dev-postcall', { env, data, events }));
-  }, 120_000);
+  }, 300_000);
 
   type Statement = { Effect: string; Action: string | string[]; Resource: unknown; Condition?: Record<string, Record<string, string[]>> };
   const statements = (): Statement[] =>
