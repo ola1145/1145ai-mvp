@@ -1,4 +1,7 @@
 name: ci
+# Third-party actions are pinned to commit SHAs (threat model SEC-03): a tag or branch can be moved under us, a SHA cannot.
+# To bump one: git ls-remote https://github.com/<owner>/<repo> refs/tags/<tag> (use the ^{} line for annotated tags),
+# then edit the SHA and the "# <tag>" comment. scripts/ci/check-workflows.ts fails the secrets-scan job on an unpinned action.
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review]
@@ -14,25 +17,34 @@ permissions:
   pull-requests: read
   actions: read
 
+# The jobs that decide whether a PR may merge (ownership, contracts-guard, secrets-scan, main-green) read their checker
+# from the BASE commit (the workspace root), and only look at the PR through a second checkout in pr/. If they ran the
+# PR's own copy, a PR could widen its own ownership in orchestration/issues.ts or switch the check off (SEC-01).
+# `git diff` runs inside pr/ (working-directory: pr) while the script and orchestration/issues.ts come from the base.
+
 jobs:
   typescript:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
+      # services/*/test-integration is collected here too. Files that need DynamoDB Local skip themselves unless
+      # DYNAMODB_LOCAL_ENDPOINT is set; tests/e2e/isolation/test/isolation.e2e.test.ts skips unless ISOLATION_* is set.
       - run: pnpm test
 
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with: { persist-credentials: false }
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with: { enable-cache: true }
       - run: uv run --locked pytest -q
         working-directory: engines/livekit-agent
@@ -43,28 +55,73 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm cdk synth -q
         working-directory: infra/cdk
         env: { CDK_DEFAULT_ACCOUNT: "298713973957", CDK_DEFAULT_REGION: us-east-1 }
 
+  # Prompts, templates, the style package or the evals themselves changed: run the scenario suite against the scripted
+  # fakes (free, deterministic). The job always reports so it can be a required check; the steps skip when nothing relevant changed.
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with: { fetch-depth: 0, persist-credentials: false }
+      - name: Did a prompt, template, the style package or the evals change?
+        id: changed
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          run=false
+          if [ "$EVENT" = "pull_request" ] && git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" \
+            | grep -Eq '^(evals/|packages/conversation-style/|agents/.*(system_prompt|prompts)|engines/livekit-agent/src/.*prompts\.py|services/[^/]+/templates/)'; then run=true; fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "evals needed: $run"
+      - if: steps.changed.outputs.run == 'true'
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - if: steps.changed.outputs.run == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22, cache: pnpm }
+      - if: steps.changed.outputs.run == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.changed.outputs.run == 'true'
+        run: pnpm exec tsx evals/src/cli.ts --runs 2
+
   ownership:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v6
-        with: { fetch-depth: 0 }
-      - uses: pnpm/action-setup@v4
+      # Trusted: the base commit. Its scripts/ci and orchestration/issues.ts decide who owns what.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      # Untrusted: the PR head. Only `git diff` reads it; nothing in it is installed or run.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         if: github.event_name == 'pull_request'
-      - uses: actions/setup-node@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        if: github.event_name == 'pull_request'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: github.event_name == 'pull_request'
         with: { node-version: 22, cache: pnpm }
       - if: github.event_name == 'pull_request'
-        run: pnpm install --frozen-lockfile && pnpm exec tsx scripts/ci/check-ownership.ts ownership
+        run: pnpm install --frozen-lockfile
+      - if: github.event_name == 'pull_request'
+        working-directory: pr
+        run: ../node_modules/.bin/tsx ../scripts/ci/check-ownership.ts ownership
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
@@ -79,15 +136,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v6
-        with: { fetch-depth: 0 }
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         if: github.event_name == 'pull_request'
-      - uses: actions/setup-node@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        if: github.event_name == 'pull_request'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: github.event_name == 'pull_request'
         with: { node-version: 22, cache: pnpm }
       - if: github.event_name == 'pull_request'
-        run: pnpm install --frozen-lockfile && pnpm exec tsx scripts/ci/check-ownership.ts contracts
+        run: pnpm install --frozen-lockfile
+      - if: github.event_name == 'pull_request'
+        working-directory: pr
+        run: ../node_modules/.bin/tsx ../scripts/ci/check-ownership.ts contracts
         env:
           PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -99,27 +168,68 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsx scripts/ci/check-style.ts
 
+  # Two secret passes plus a workflow lint, all of them reading the PR through pr/:
+  #   1. trufflehog, verified findings only (a live credential);
+  #   2. check-secrets.ts, the lines the PR adds, for key shapes and random literals trufflehog cannot verify (our own HMAC keys, webhook and service secrets);
+  #   3. check-workflows.ts, every workflow in the PR: actions pinned to a SHA, no open bot list, no untrusted text in scripts or prompts.
   secrets-scan:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v6
-        with: { fetch-depth: 0 }
-      - uses: trufflesecurity/trufflehog@main
-        with: { extra_args: --only-verified }
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: trufflesecurity/trufflehog@b2b0a92070f206ab7b5a1105d82a7f2f48d92341 # v3.99.0
+        # version: the docker image the action runs, kept in step with the pinned action release.
+        with: { path: pr, version: "3.99.0", extra_args: --only-verified }
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        if: github.event_name == 'pull_request'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: github.event_name == 'pull_request'
+        with: { node-version: 22, cache: pnpm }
+      - if: github.event_name == 'pull_request'
+        run: pnpm install --frozen-lockfile
+      - name: Unverified secret pass over the added lines
+        if: github.event_name == 'pull_request'
+        working-directory: pr
+        # The base copy. Only the PR that first adds the script has no base copy, and then its own copy runs.
+        run: |
+          if [ -f ../scripts/ci/check-secrets.ts ]; then ../node_modules/.bin/tsx ../scripts/ci/check-secrets.ts
+          else echo "base has no check-secrets.ts yet; using this PR's copy"; ../node_modules/.bin/tsx scripts/ci/check-secrets.ts; fi
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      - name: Workflow lint (pinned actions, named bots, no untrusted text in scripts)
+        if: github.event_name == 'pull_request'
+        working-directory: pr
+        run: |
+          if [ -f ../scripts/ci/check-workflows.ts ]; then ../node_modules/.bin/tsx ../scripts/ci/check-workflows.ts .github/workflows
+          else echo "base has no check-workflows.ts yet; using this PR's copy"; ../node_modules/.bin/tsx scripts/ci/check-workflows.ts .github/workflows; fi
 
   main-green:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v6
+      # The base commit's script, so a PR cannot edit the freeze away.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
       - if: github.event_name == 'pull_request'
         run: bash scripts/ci/main-green.sh
         env:

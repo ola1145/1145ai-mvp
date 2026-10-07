@@ -5,9 +5,13 @@
     "packages/*/test/**/*.ts",
     "services/*/src/**/*.ts",
     "services/*/test/**/*.ts",
+    "services/*/test-integration/**/*.ts",
+    "services/*/bench/**/*.ts",
     "engines/*/src/**/*.ts",
     "engines/*/test/**/*.ts",
     "orchestration/**/*.ts",
+    "evals/**/*.ts",
+    "tests/e2e/isolation/**/*.ts",
     "scripts/**/*.ts"
   ]
 }

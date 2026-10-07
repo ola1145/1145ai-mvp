@@ -1,4 +1,4 @@
-.PHONY: bootstrap test test-ts test-py typecheck synth briefs style deps-batch
+.PHONY: bootstrap test test-ts test-py typecheck synth briefs style deps-batch evals lint-workflows
 
 bootstrap:
 	pnpm install
@@ -28,3 +28,11 @@ briefs:
 
 style:
 	pnpm exec tsx scripts/ci/check-style.ts
+
+# Scenario suite against the scripted fakes and the offline judge (free, deterministic). Live runs belong to a nightly job.
+evals:
+	pnpm exec tsx evals/src/cli.ts --runs 5
+
+# Every workflow: actions pinned to a commit SHA, no allowed_bots "*", no untrusted event text in scripts or prompts.
+lint-workflows:
+	pnpm exec tsx scripts/ci/check-workflows.ts .github/workflows

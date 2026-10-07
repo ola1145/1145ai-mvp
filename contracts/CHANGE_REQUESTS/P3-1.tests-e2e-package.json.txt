@@ -1,0 +1,14 @@
+{
+  "name": "@1145/e2e",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "test": "node --test \"harness/**/*.test.ts\" \"scenarios/**/*.test.ts\"",
+    "gate:live": "node harness/run-live.ts",
+    "isolation": "vitest run --root isolation"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
+  }
+}

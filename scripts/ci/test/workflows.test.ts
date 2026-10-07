@@ -1,22 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-
-const root = fileURLToPath(new URL('../../../', import.meta.url));
-const read = (p: string) => readFileSync(root + p, 'utf8');
-
-/** Top-level job ids and their blocks, without a YAML dependency (jobs are indented two spaces under `jobs:`). */
-function jobs(file: string): Record<string, string> {
-  const text = read(`.github/workflows/${file}`);
-  const body = text.slice(text.indexOf('\njobs:\n') + 6);
-  const out: Record<string, string> = {};
-  let cur = '';
-  for (const line of body.split('\n')) {
-    const m = /^ {2}([a-z0-9-]+):\s*$/.exec(line);
-    if (m) { cur = m[1]!; out[cur] = ''; } else if (cur) out[cur] += line + '\n';
-  }
-  return out;
-}
+import { jobs, read } from './helpers.js';
 
 describe('required checks keep their names', () => {
   const required = (JSON.parse(read('.github/rulesets/main.json')) as { rules: Array<{ type: string; parameters?: { required_status_checks?: Array<{ context: string }> } }> })

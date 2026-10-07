@@ -1,7 +1,8 @@
 name: automerge
 # Enables GitHub auto-merge (squash) on tagged agent PRs. Uses a PAT so the merge commit triggers deploy workflows
 # (merges performed with GITHUB_TOKEN do not start new workflow runs). Auto-merge only waits for the required checks
-# in the main ruleset; it never bypasses them.
+# in the main ruleset; it never bypasses them. Fork PRs are never auto-merged (the repo is public, anyone can open one
+# and a title that starts with [1145: is free to type).
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, edited, labeled, unlabeled, synchronize]
@@ -16,7 +17,9 @@ jobs:
   automerge:
     runs-on: ubuntu-latest
     timeout-minutes: 3
-    if: startsWith(github.event.pull_request.title, '[1145:') && github.event.pull_request.draft == false
+    if: >-
+      startsWith(github.event.pull_request.title, '[1145:') && github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Enable or disable auto-merge
         env:
