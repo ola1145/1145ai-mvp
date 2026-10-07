@@ -564,7 +564,8 @@ describe('tenant isolation', () => {
     e.queryStringParameters = { tenantId: 't_evil00001' };
     e.headers['x-tenant-id'] = 't_evil00001';
     await rescheduleBooking(e, deps);
-    await cancelBooking(ev('cancel', bookingId, { tenantId: 't_evil00001', ...WHO }, { idem: 'idem-cancel-09' }), deps);
+    // The reschedule above moved the booking to Wednesday, which is now the day it is booked for.
+    await cancelBooking(ev('cancel', bookingId, { tenantId: 't_evil00001', ...WHO, bookedDay: '2026-10-07' }, { idem: 'idem-cancel-09' }), deps);
     expect(new Set(repoCalls)).toEqual(new Set([TENANT]));
     expect(evil.bookings[0]?.status).toBe('confirmed');
     expect(evil.bookings[0]?.start).toBe(TUE_3PM);
