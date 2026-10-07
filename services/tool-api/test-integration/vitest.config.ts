@@ -6,7 +6,7 @@ const at = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 /** The root vitest config only includes services/<svc>/test. Run these with:
  *    pnpm vitest run --config services/tool-api/test-integration/vitest.config.ts
  *  DynamoDB Local tests skip cleanly unless DYNAMODB_LOCAL_ENDPOINT is set (see bench/README.md).
- *  api-stack.test.ts synthesizes the CDK stack, so aws-cdk-lib resolves from infra/cdk (this package does not depend on it). */
+ *  The ApiStack wiring test lives in infra/cdk/test/api-stack.test.ts. */
 export default defineConfig({
   root: at('../../..'),
   resolve: {

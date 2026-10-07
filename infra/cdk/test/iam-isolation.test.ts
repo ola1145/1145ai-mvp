@@ -39,7 +39,9 @@ const ACCEPTED_TABLE_GRANTS: Array<{ stack: string; actions: string[]; reason: s
 ];
 
 /** The only stacks whose roles may read or write the table across tenants (a TENANT#<wildcard> pattern or no usable limit). */
-const CROSS_TENANT_TABLE_STACKS = ['auth', 'provisioning', 'controlplane', 'notifications'];
+// postcall: one consumer handles call.ended for every tenant (usage counter, CRM upsert, Stripe usage guard). The tenant
+// comes from the event, and only the voice and engine producers may put call.ended (SEC-13).
+const CROSS_TENANT_TABLE_STACKS = ['auth', 'provisioning', 'controlplane', 'notifications', 'postcall'];
 /** The only stacks whose roles may hold tenant bucket paths that span tenants. Each is limited to a folder or to staff. */
 const CROSS_TENANT_BUCKET_STACKS = ['controlplane', 'postcall', 'voice'];
 /** The one stack whose roles may assume TenantDataRole, i.e. choose the tenant_id session tag. */

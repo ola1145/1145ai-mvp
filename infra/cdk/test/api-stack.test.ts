@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
  * memory (no esbuild bundling, nothing reaches AWS). Run with the config in this folder (see vitest.config.ts).
  */
 
-const CDK_DIR = fileURLToPath(new URL('../../../infra/cdk', import.meta.url));
+const CDK_DIR = fileURLToPath(new URL('..', import.meta.url));
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -16,8 +16,8 @@ async function synth(context: Record<string, unknown> = {}): Promise<Json> {
   process.chdir(CDK_DIR); // lib/paths.ts resolves the repo root from cwd when it is imported (cdk runs inside infra/cdk)
   try {
     const [cdk, assertions, api, auth, data, events] = await Promise.all([
-      import('aws-cdk-lib'), import('aws-cdk-lib/assertions'), import('../../../infra/cdk/lib/api-stack.js'),
-      import('../../../infra/cdk/lib/auth-stack.js'), import('../../../infra/cdk/lib/data-stack.js'), import('../../../infra/cdk/lib/events-stack.js'),
+      import('aws-cdk-lib'), import('aws-cdk-lib/assertions'), import('../lib/api-stack.js'),
+      import('../lib/auth-stack.js'), import('../lib/data-stack.js'), import('../lib/events-stack.js'),
     ]);
     const app = new cdk.App({ context: { stage: 'dev', 'aws:cdk:bundling-stacks': [], 'aws:cdk:disable-asset-staging': true, ...context } });
     const env = { account: '111111111111', region: 'us-east-1' };
@@ -84,7 +84,7 @@ describe('route names for the latency metric (P7-2)', () => {
     const before = process.cwd();
     process.chdir(CDK_DIR);
     try {
-      const { VOICE_TOOL_ROUTES } = await import('../../../infra/cdk/lib/observability-stack.js');
+      const { VOICE_TOOL_ROUTES } = await import('../lib/observability-stack.js');
       for (const r of VOICE_TOOL_ROUTES) expect(fns.map((f) => f.route), r).toContain(r);
     } finally { process.chdir(before); }
   });

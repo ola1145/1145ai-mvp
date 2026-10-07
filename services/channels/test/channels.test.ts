@@ -567,7 +567,8 @@ describe('store.checkRate (per-identity cap, SEC-25)', () => {
   });
 
   it('keys the counter by a hash of the sender under RATELIMIT#, with a ttl, and never stores the raw id', async () => {
-    const { doc, store } = make();
+    const doc = counterDoc();
+    const { store } = make(doc);
     await store.checkRate(msg);
     const entries = [...doc.rows.entries()];
     expect(entries).toHaveLength(1);
