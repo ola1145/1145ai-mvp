@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyTenantToken } from '@1145/shared';
 import { resolveNumber } from '../src/handlers/internal-resolve-number.js';
 import { resolveWidget } from '../src/handlers/internal-resolve-widget.js';
@@ -50,6 +50,14 @@ const numberReq = (over: Item = {}) => ev({ dialed: DIALED, caller: CALLER, call
 const widgetReq = (over: Item = {}) => ev({ widgetKey: WIDGET, callId: ROOM, ...over });
 const setup = () => { const store = new FakeStore(); return { store, deps: createResolverDeps(store) }; };
 const claims = (token: string) => verifyTenantToken(token, [SECRET]);
+
+// The not-ready path logs one structured warning; keep it out of the test output, and look at what it says.
+let warnings: string[] = [];
+beforeEach(() => {
+  warnings = [];
+  vi.spyOn(console, 'warn').mockImplementation((line: unknown) => { warnings.push(String(line)); });
+});
+afterEach(() => { vi.restoreAllMocks(); });
 
 describe('resolveNumber: the dialed number decides the tenant', () => {
   it('returns runtime config from PROFILE.rendered* and a call-scoped customer-agent token', async () => {
@@ -337,11 +345,16 @@ describe('runtime config: PROFILE.rendered*, cached for 60 s', () => {
 
 describe('ddbItemReaders: which keys are read, and with whose credentials', () => {
   type Sent = { table: string; key: Item; consistent?: boolean; projection?: string };
+  /** Resolve `#a0, #a1` aliases back to attribute names, the way DynamoDB would. */
+  const attributesRead = (projection: string | undefined, names: Record<string, string> | undefined) =>
+    (projection ?? '').split(',').map((a) => a.trim()).filter(Boolean).map((a) => names?.[a] ?? a);
+  const lastNames: { current?: Record<string, string> } = {};
   const recorder = (item?: Item) => {
     const sent: Sent[] = [];
     const doc: DocLike = {
       async send(cmd) {
-        const i = cmd.input as { TableName: string; Key: Item; ConsistentRead?: boolean; ProjectionExpression?: string };
+        const i = cmd.input as { TableName: string; Key: Item; ConsistentRead?: boolean; ProjectionExpression?: string; ExpressionAttributeNames?: Record<string, string> };
+        lastNames.current = i.ExpressionAttributeNames;
         sent.push({ table: i.TableName, key: i.Key, consistent: i.ConsistentRead, projection: i.ProjectionExpression });
         return { Item: item };
       },
@@ -372,10 +385,9 @@ describe('ddbItemReaders: which keys are read, and with whose credentials', () =
     expect(tenantA.sent).toHaveLength(1);
     expect(tenantA.sent[0]!.key).toEqual({ PK: `TENANT#${TID_A}`, SK: 'PROFILE' });
     // Only what the resolver needs is pulled out of PROFILE (no owner contact details, no engine refs).
-    const projection = tenantA.sent[0]!.projection ?? '';
-    expect(projection).toContain('renderedInstructions');
-    expect(projection).toContain('renderedDisclosureLine');
-    expect(projection).not.toMatch(/engineRef|handoffNumber|email|phone/i);
+    const read = attributesRead(tenantA.sent[0]!.projection, lastNames.current);
+    expect(read).toEqual(expect.arrayContaining(['renderedInstructions', 'renderedDisclosureLine', 'templateVersion', 'timezone', 'name', 'state']));
+    expect(read.join(' ')).not.toMatch(/engineRef|handoffNumber|email|phone/i);
   });
 
   it('never builds a key from anything but the validated inputs', async () => {
@@ -419,5 +431,9 @@ describe('end to end through the HTTP wrapper', () => {
     const r = await handle((e) => resolveNumber(e, deps))(numberReq());
     expect(r.statusCode).toBe(503);
     expect(r.body).not.toMatch(/eyJ/);
+    // The log names the tenant and the reason, but never the token, the caller's number or the prompt.
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(TID_A);
+    expect(warnings[0]).not.toMatch(/eyJ|\+1214|instructions for/);
   });
 });
