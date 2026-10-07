@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { searchNumber } from '../src/steps/search-number.js';
-import { bindEngine, ddbRouteStore, type RouteStore } from '../src/steps/bind-engine.js';
-import { telnyxClient, TelnyxRejectedError, TelnyxTransientError } from '../src/lib/telnyx.js';
+import { bindEngine, ddbProfileBinder, ddbRouteStore, type ProfileBinder, type RouteStore } from '../src/steps/bind-engine.js';
+import { loadTelnyxConfig, telnyxClient, TelnyxRejectedError, TelnyxTransientError } from '../src/lib/telnyx.js';
 
 /**
  * Hand-written fixtures and fakes: nothing here was recorded from Telnyx and no request leaves the process.
@@ -68,6 +68,34 @@ describe('Telnyx client (fake fetch)', () => {
     expect(calls).toEqual([['GET', '/v2/phone_numbers']]);
     phoneNumbers = [];
     await expect(t.assignToConnection('+12145550100', 'conn_1')).rejects.toBeInstanceOf(TelnyxTransientError);
+  });
+
+  it('findOwnedNumber (SEC-18) answers from the account list, matches the exact number, and treats a failed lookup as transient, never as "not owned"', async () => {
+    const urls: string[] = [];
+    let rows: unknown[] = [{ id: 'pn9', phone_number: '+12145550100' }];
+    const t = telnyxClient('k', (async (u: string) => { urls.push(String(u)); return json(200, { data: rows }); }) as unknown as typeof fetch);
+    expect(await t.findOwnedNumber('+12145550100')).toEqual({ id: 'pn9' });
+    expect(new URL(urls[0]!).pathname).toBe('/v2/phone_numbers');
+    expect(new URL(urls[0]!).searchParams.get('filter[phone_number]')).toBe('+12145550100');
+    rows = [{ id: 'pn8', phone_number: '+12145550199' }];            // a filter that matches loosely must not adopt another number
+    expect(await t.findOwnedNumber('+12145550100')).toBeUndefined();
+    rows = [];
+    expect(await t.findOwnedNumber('+12145550100')).toBeUndefined();
+    const down = telnyxClient('k', (async () => json(503, {})) as unknown as typeof fetch);
+    await expect(down.findOwnedNumber('+12145550100')).rejects.toBeInstanceOf(TelnyxTransientError);
+  });
+
+  it('assignToConnection never points a different number at our connection', async () => {
+    const calls: string[] = [];
+    const f = (async (u: string, init: RequestInit) => { calls.push(init.method ?? 'GET'); return json(200, { data: [{ id: 'pn_other', phone_number: '+12145550199', connection_id: 'old' }] }); }) as unknown as typeof fetch;
+    await expect(telnyxClient('k', f).assignToConnection('+12145550100', 'conn_1')).rejects.toBeInstanceOf(TelnyxTransientError);
+    expect(calls).toEqual(['GET']);
+  });
+});
+
+describe('loadTelnyxConfig: the stage runtime secret', () => {
+  it('needs a secret id (a name or an ARN) and says so plainly', async () => {
+    await expect(loadTelnyxConfig({} as NodeJS.ProcessEnv)).rejects.toThrow(/TELNYX_SECRET_ID/);
   });
 });
 
@@ -168,6 +196,70 @@ describe('bindEngine: routes and connection', () => {
     await expect(bindEngine({ ...input, number: '2145550100' }, { telnyx: f.telnyx, routes: f.routes })).rejects.toThrow();
     expect(f.log).toEqual([]);
   });
+
+  it('records the engine reference on the tenant PROFILE, after the routes, so render and the console find the same agent', async () => {
+    const f = fakes();
+    const calls: unknown[] = [];
+    const profile: ProfileBinder = { recordBinding: async (a) => { f.log.push('profile'); calls.push(a); } };
+    const basics = { businessName: 'Kemi Cuts', businessType: 'barbershop' };
+    await bindEngine({ ...input, basics }, { telnyx: f.telnyx, routes: f.routes, profile });
+    expect(f.log).toEqual(['assign:+12145550100:conn_1', 'number-route', 'agent-route', 'profile']);
+    expect(calls).toEqual([{ tenantId: 't_abcdefgh1', onboardingId: 'onb_1', number: '+12145550100', engine: 'livekit-telnyx', agentId: 'frontdesk:t_abcdefgh1', basics }]);
+  });
+
+  it('a profile write that fails fails the step, so the workflow retries instead of moving on without an engine reference', async () => {
+    const f = fakes();
+    const profile: ProfileBinder = { recordBinding: async () => { throw new Error('dynamodb down'); } };
+    await expect(bindEngine(input, { telnyx: f.telnyx, routes: f.routes, profile })).rejects.toThrow('dynamodb down');
+  });
+});
+
+describe('ddbProfileBinder: PROFILE.engine and PROFILE.engineRef (the shape RenderAgent and the console both read)', () => {
+  function recorder() {
+    const sent: Array<{ constructor: { name: string }; input: Record<string, any> }> = [];
+    return { sent, client: { send: async (cmd: { constructor: { name: string }; input: Record<string, any> }) => { sent.push(cmd); return {}; } } };
+  }
+  const args = { tenantId: 't_abcdefgh1', onboardingId: 'onb_1', number: '+12145550100', engine: 'livekit-telnyx' as const, agentId: 'frontdesk:t_abcdefgh1' };
+
+  it('upserts TENANT#<tid>/PROFILE in one UpdateItem: engine fields always, identity fields only when they are new', async () => {
+    const r = recorder();
+    await ddbProfileBinder(r.client, 'tbl', () => new Date('2026-10-06T12:00:00.000Z')).recordBinding({ ...args, basics: { businessName: 'Kemi Cuts', businessType: 'barbershop' } });
+    expect(r.sent).toHaveLength(1);
+    const i = r.sent[0]!.input;
+    expect(r.sent[0]!.constructor.name).toBe('UpdateCommand');
+    expect(i.Key).toEqual({ PK: 'TENANT#t_abcdefgh1', SK: 'PROFILE' });
+    const names = i.ExpressionAttributeNames as Record<string, string>;
+    const values = i.ExpressionAttributeValues as Record<string, unknown>;
+    const expr = String(i.UpdateExpression);
+    // engineRef is the full reference object: RenderAgent needs engine + tenantId + agentId, the console reads agentId.
+    expect(Object.values(values)).toContainEqual({ engine: 'livekit-telnyx', tenantId: 't_abcdefgh1', agentId: 'frontdesk:t_abcdefgh1' });
+    expect(Object.values(values)).toContain('livekit-telnyx');
+    expect(expr).toMatch(/engineRef = :ref/);
+    // The state of an existing tenant (active, suspended, over_cap) is never reset by a re-run.
+    expect(expr).toMatch(/#state = if_not_exists\(#state, :provisioning\)/);
+    expect(names['#state']).toBe('state');
+    expect(values[':provisioning']).toBe('provisioning');
+    // Names the resolver, notifications and the console read: `name` and `businessName`.
+    expect(Object.values(values)).toContain('Kemi Cuts');
+    expect(expr).toMatch(/if_not_exists\(#name, :name\)/);
+    expect(expr).toMatch(/businessName = if_not_exists\(businessName, :name\)/);
+    expect(expr).toMatch(/#numbers = if_not_exists\(#numbers, :nums\)/);
+    expect(values[':nums']).toEqual(['+12145550100']);
+  });
+
+  it('without basics it still writes the engine reference and leaves names alone', async () => {
+    const r = recorder();
+    await ddbProfileBinder(r.client, 'tbl').recordBinding(args);
+    const expr = String(r.sent[0]!.input.UpdateExpression);
+    expect(expr).toMatch(/engineRef = :ref/);
+    expect(expr).not.toMatch(/businessName/);
+  });
+
+  it('refuses a malformed tenant id before any write', async () => {
+    const r = recorder();
+    await expect(ddbProfileBinder(r.client, 'tbl').recordBinding({ ...args, tenantId: 'TENANT#x' })).rejects.toThrow();
+    expect(r.sent).toEqual([]);
+  });
 });
 
 describe('ddbRouteStore: conditional writes keyed per contracts/dynamodb/keys.md', () => {
@@ -187,5 +279,53 @@ describe('ddbRouteStore: conditional writes keyed per contracts/dynamodb/keys.md
     const client = { send: async () => { throw Object.assign(new Error('x'), { name: 'ConditionalCheckFailedException' }); } };
     const err = await ddbRouteStore(client, 'tbl').putNumberRoute('+12145550100', { tid: 't_abcdefgh1', engine: 'livekit-telnyx', state: 'active' }).catch((e: Error) => e);
     expect((err as Error).name).toBe('RouteConflict');
+  });
+});
+
+/**
+ * CR E6-1: the LiveKit adapter's RouteStore port, backed by DynamoDB. The two writes above already had this shape; the
+ * four below are the reads and the conditional state flip the adapter also needs (kill switch, smoke call, unbind).
+ */
+describe('ddbRouteStore: the rest of the adapter\'s RouteStore port (CR E6-1)', () => {
+  const notFound = () => Object.assign(new Error('x'), { name: 'ConditionalCheckFailedException' });
+
+  it('getNumberRoute reads NUMBER#<e164>/ROUTE consistently and returns tid, state and engine', async () => {
+    const sent: Array<{ constructor: { name: string }; input: Record<string, any> }> = [];
+    const client = { send: async (cmd: { constructor: { name: string }; input: Record<string, any> }) => { sent.push(cmd); return { Item: { PK: 'NUMBER#+12145550100', SK: 'ROUTE', tid: 't_abcdefgh1', state: 'over_cap', engine: 'livekit-telnyx' } }; } };
+    expect(await ddbRouteStore(client, 'tbl').getNumberRoute('+12145550100')).toEqual({ tid: 't_abcdefgh1', state: 'over_cap', engine: 'livekit-telnyx' });
+    expect(sent[0]!.input).toMatchObject({ Key: { PK: 'NUMBER#+12145550100', SK: 'ROUTE' }, ConsistentRead: true });
+    const none = { send: async () => ({}) };
+    expect(await ddbRouteStore(none, 'tbl').getNumberRoute('+12145550100')).toBeUndefined();
+    const odd = { send: async () => ({ Item: { tid: 't_abcdefgh1', state: 'weird' } }) };
+    expect((await ddbRouteStore(odd, 'tbl').getNumberRoute('+12145550100'))?.state).toBe('suspended'); // unknown state is read as the stricter one
+  });
+
+  it('numbersFor lists PROFILE.numbers of that tenant only, dropping anything that is not E.164', async () => {
+    const sent: Array<{ input: Record<string, any> }> = [];
+    const client = { send: async (cmd: { input: Record<string, any> }) => { sent.push(cmd); return { Item: { numbers: ['+12145550100', 'not-a-number', 5] } }; } };
+    expect(await ddbRouteStore(client, 'tbl').numbersFor('t_abcdefgh1' as never)).toEqual(['+12145550100']);
+    expect(sent[0]!.input.Key).toEqual({ PK: 'TENANT#t_abcdefgh1', SK: 'PROFILE' });
+  });
+
+  it('setNumberState flips only this tenant\'s route, and says false instead of throwing when the route is gone or someone else\'s', async () => {
+    const sent: Array<{ input: Record<string, any> }> = [];
+    const ok = { send: async (cmd: { input: Record<string, any> }) => { sent.push(cmd); return {}; } };
+    expect(await ddbRouteStore(ok, 'tbl').setNumberState('+12145550100', 't_abcdefgh1' as never, 'suspended')).toBe(true);
+    expect(sent[0]!.input).toMatchObject({
+      Key: { PK: 'NUMBER#+12145550100', SK: 'ROUTE' }, ConditionExpression: 'tid = :tid',
+      ExpressionAttributeValues: { ':s': 'suspended', ':tid': 't_abcdefgh1' },
+    });
+    const gone = { send: async () => { throw notFound(); } };
+    expect(await ddbRouteStore(gone, 'tbl').setNumberState('+12145550100', 't_abcdefgh1' as never, 'active')).toBe(false);
+    const down = { send: async () => { throw new Error('throttled'); } };
+    await expect(ddbRouteStore(down, 'tbl').setNumberState('+12145550100', 't_abcdefgh1' as never, 'active')).rejects.toThrow('throttled');
+  });
+
+  it('deleteNumberRoute removes NUMBER#<e164>/ROUTE', async () => {
+    const sent: Array<{ constructor: { name: string }; input: Record<string, any> }> = [];
+    const client = { send: async (cmd: { constructor: { name: string }; input: Record<string, any> }) => { sent.push(cmd); return {}; } };
+    await ddbRouteStore(client, 'tbl').deleteNumberRoute('+12145550100');
+    expect(sent[0]!.constructor.name).toBe('DeleteCommand');
+    expect(sent[0]!.input.Key).toEqual({ PK: 'NUMBER#+12145550100', SK: 'ROUTE' });
   });
 });
