@@ -5,6 +5,12 @@ import type { AgentDispatcher, RouteStore, SipDialer } from './ports.js';
 export const E164_RE = /^\+[1-9]\d{6,14}$/;
 /** LiveKit room names we create. `chat-` rooms belong to the web widget path (the worker resolves those by widget key). */
 const ROOM_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+/**
+ * Every outbound room starts with this. The worker (`frontdesk/sip.py` `call_id_for`) uses the ROOM NAME as the call id
+ * for such rooms, so `dialOut` can return the id `call.ended` will carry without waiting for the call to connect
+ * (D8-3). Keep the two in step.
+ */
+export const SMOKE_ROOM_PREFIX = 'smoke-';
 
 export interface DialOutEnv {
   sip: SipDialer;
@@ -28,12 +34,17 @@ export interface DialOutParams { roomName: string; to: E164; fromNumber: E164; t
  * documents as the number the call originates from on an outbound trunk (not yet confirmed on a real call: E8 spike).
  * So nothing about the tenant goes into the dispatch or the SIP call, and `fromNumber` must already route to
  * `tenantId`, otherwise the call would run as someone else.
- * Returns the SIP call id, which is the id the worker puts on every event of the call (`sip.callID`).
+ * Returns the ROOM NAME, which is the call id the worker puts on every event of this call (D8-3). The room name is
+ * chosen by us, so the id is known before anything connects, and it does not depend on LiveKit's SIP call id (the
+ * `sipCallId` that `createSipParticipant` returns) being identical to the `sip.callID` participant attribute: nothing
+ * in the SDK says they are, so nothing here relies on it.
  */
 export async function dialOut(env: DialOutEnv, p: DialOutParams): Promise<string> {
   if (!E164_RE.test(p.to)) throw new DialOutError('invalid_input', 'dialOut: to is not E.164');
   if (!E164_RE.test(p.fromNumber)) throw new DialOutError('invalid_input', 'dialOut: fromNumber is not E.164');
-  if (!ROOM_RE.test(p.roomName) || p.roomName.startsWith('chat-')) throw new DialOutError('invalid_input', 'dialOut: unusable room name');
+  if (!ROOM_RE.test(p.roomName) || p.roomName.startsWith('chat-') || !p.roomName.startsWith(SMOKE_ROOM_PREFIX)) {
+    throw new DialOutError('invalid_input', `dialOut: unusable room name (outbound rooms start with ${SMOKE_ROOM_PREFIX})`);
+  }
 
   const route = await env.routes.getNumberRoute(p.fromNumber);
   if (!route || route.tid !== p.tenantId) {
@@ -48,13 +59,13 @@ export async function dialOut(env: DialOutEnv, p: DialOutParams): Promise<string
   }
 
   try {
-    const participant = await env.sip.createSipParticipant(env.outboundTrunkId, p.to, p.roomName, {
+    await env.sip.createSipParticipant(env.outboundTrunkId, p.to, p.roomName, {
       fromNumber: p.fromNumber,
       waitUntilAnswered: true,
       ringingTimeout: env.ringingTimeoutSec,
       maxCallDuration: env.maxCallSec,
     });
-    return participant.sipCallId || p.roomName;   // the worker falls back to the room name the same way
+    return p.roomName;
   } catch (err) {
     // Nobody picked up (or the carrier refused): don't leave an agent job waiting in an empty room.
     await env.dispatch.deleteDispatch(dispatchId, p.roomName).catch(() => undefined);
