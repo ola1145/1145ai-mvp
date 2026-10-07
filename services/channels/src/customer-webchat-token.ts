@@ -111,7 +111,6 @@ const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 /** Names are owner-provided data: no control or bidi characters, one line, bounded. */
 function cleanInline(value: unknown, max: number): string {
   if (typeof value !== 'string') return '';
-  // eslint-disable-next-line no-control-regex
   return value.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max).trim();
 }
 
