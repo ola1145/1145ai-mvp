@@ -1,3 +1,4 @@
+import { safeEqual } from '@1145/shared';
 import { verifyMetaSignature, parseWhatsAppReferral } from './lib/verify.js';
 import type { InboundMessage, WebhookResult } from './lib/types.js';
 
@@ -29,7 +30,9 @@ export async function whatsappWebhook(event: WebhookEvent, deps: WhatsAppDeps): 
   const method = event.requestContext.http.method;
   if (method === 'GET') {
     const q = event.queryStringParameters ?? {};
-    const ok = q['hub.mode'] === 'subscribe' && q['hub.verify_token'] === (await deps.verifyToken());
+    // SEC-31: the verify token is a shared secret, so it is compared in constant time (and an unset secret never matches).
+    const given = q['hub.verify_token'];
+    const ok = q['hub.mode'] === 'subscribe' && typeof given === 'string' && given !== '' && safeEqual(given, await deps.verifyToken());
     return ok ? { statusCode: 200, body: q['hub.challenge'] ?? '' } : { statusCode: 403, body: 'forbidden' };
   }
 

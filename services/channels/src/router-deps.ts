@@ -10,10 +10,11 @@ import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import type { RouterDeps } from './router.js';
 import { createAgentInvoker, type AgentRuntimeClient } from './lib/agentcore.js';
 import { createOwnerChatPublisher } from './lib/appsync-events.js';
+import { createBindingAnswerer } from './lib/binding.js';
 import { APPLIED_LINE, CODE_NOT_FOUND_LINE, SNAG_LINES, STEP_UP_LINE } from './lib/copy.js';
 import { createSender } from './lib/senders.js';
 import { createStore } from './lib/store.js';
-import { createTelegramSender } from './lib/telegram.js';
+import { createTelegramSender } from './telegram-send.js';
 
 /** Keys in the runtime secret `1145/<stage>/runtime` (scripts/secrets/push.sh). */
 interface RuntimeSecret { TOOL_API_TOKEN_SECRET_CURRENT?: string; TELEGRAM_BOT_TOKEN?: string }
@@ -24,7 +25,13 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
   return v;
 }
 
-export function createProdDeps(env: NodeJS.ProcessEnv = process.env): RouterDeps {
+/**
+ * What is deployed: every dependency, including the deterministic YES / NO for the pending identity binding (SEC-20) and the
+ * per-identity message cap (SEC-25). Both are optional on `RouterDeps` so test fakes can leave them out; here they are not.
+ */
+export type ProdRouterDeps = RouterDeps & Required<Pick<RouterDeps, 'answerPendingBinding' | 'checkRate'>>;
+
+export function createProdDeps(env: NodeJS.ProcessEnv = process.env): ProdRouterDeps {
   const region = env.AWS_REGION ?? 'us-east-1';
   const sm = new SecretsManagerClient({});
   let secretCache: { value: RuntimeSecret; at: number } | undefined;
@@ -35,10 +42,9 @@ export function createProdDeps(env: NodeJS.ProcessEnv = process.env): RouterDeps
     return secretCache.value;
   };
 
-  const store = createStore({
-    doc: DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } }),
-    tableName: required(env, 'TABLE_NAME'),
-  });
+  const doc = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
+  const tableName = required(env, 'TABLE_NAME');
+  const store = createStore({ doc, tableName });
 
   const invokeAgent = createAgentInvoker({
     client: new BedrockAgentCoreClient({}) as unknown as AgentRuntimeClient,
@@ -60,6 +66,8 @@ export function createProdDeps(env: NodeJS.ProcessEnv = process.env): RouterDeps
 
   return {
     ...store,
+    // SEC-20: the owner's YES / NO to the identity check never reaches the model.
+    answerPendingBinding: createBindingAnswerer({ doc, tableName }),
     invokeAgent,
     send,
     signingSecret: async () => {

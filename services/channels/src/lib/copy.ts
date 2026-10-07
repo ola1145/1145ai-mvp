@@ -14,6 +14,12 @@ export const SNAG_LINES = [
   "That didn't go through on my end. Mind sending it once more?",
 ] as const;
 
+/** Said once when one person sends far more messages than a person types in a minute (the router's per-identity cap, SEC-25). */
+export const RATE_LIMIT_LINES = [
+  "That's a lot at once, so give me a minute to catch up. Then send what you still need.",
+  'Lots of messages came in at once. Give me a minute to catch up, then send it again.',
+] as const;
+
 export const PAUSED_LINE =
   "Your account's paused right now. Update billing in your dashboard and I'm right back, or reply HELP and a person will pick this up.";
 
