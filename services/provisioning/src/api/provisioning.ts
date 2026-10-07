@@ -115,7 +115,7 @@ export interface ProgressSummary {
   numberDisplay?: string;
 }
 
-/** State names in contracts' state machine (infra/cdk/lib/provisioning-stack.ts), grouped the way the owner thinks of them. */
+/** State names of the workflow in infra/cdk/lib/provisioning-stack.ts, grouped the way the owner thinks of them. */
 const STEPS: Array<{ step: StepName; states: string[] }> = [
   { step: 'payment', states: ['CheckPaymentMethod'] },
   { step: 'number', states: ['SearchNumber', 'OrderNumber', 'BindEngine'] },
@@ -274,7 +274,6 @@ export function summarize(ex: ExecutionInfo, history: readonly HistoryEvent[] | 
   }
 
   const steps: StepStatus[] = [];
-  const errors = new Map<StepName, string | undefined>();
   for (const def of STEPS) {
     const copy = COPY[def.step];
     const last = def.states[def.states.length - 1]!;
@@ -286,7 +285,6 @@ export function summarize(ex: ExecutionInfo, history: readonly HistoryEvent[] | 
     if (seen.get(last)?.exited) { state = 'done'; line = copy.done; }
     else if (failedAt) {
       const error = seen.get(failedAt)?.failure;
-      errors.set(def.step, error);
       if (def.step === 'payment' && error === 'NeedsPaymentMethod') { state = 'waiting_owner'; line = copy.special; }
       else { state = 'failed'; line = def.step === 'number' && error === 'NoNumberAvailable' ? copy.special : copy.failed; }
     } else if (stoppedAt) { state = 'stopped'; line = STOPPED; }
