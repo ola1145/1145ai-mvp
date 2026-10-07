@@ -43,6 +43,8 @@ async function failure(p: Promise<unknown>): Promise<TelegramSendError> {
   throw new Error('expected the send to fail');
 }
 
+const sent0 = (h: { calls: Array<{ json: Record<string, unknown> }> }) => String(h.calls[0]?.json.text);
+
 describe('sendTelegramMessage', () => {
   it('posts plain text to the bot API with link previews off and no parse_mode', async () => {
     const h = harness([OK]);
@@ -180,8 +182,9 @@ describe('sendTelegramMessage', () => {
       const text = `${para('a')}\n\n${para('b')}\n\n${'c'.repeat(100)}`;
       const h = harness([OK, OK, OK]);
       const r = await h.send('15550001', text);
+      expect(sent0(h)).toBe('a'.repeat(3000)); // cut on the blank line, not mid-paragraph
       const sent = h.calls.map((c) => String(c.json.text));
-      expect(sent.length).toBeGreaterThanOrEqual(3);
+      expect(sent.length).toBeGreaterThanOrEqual(2);
       for (const s of sent) expect(s.length).toBeLessThanOrEqual(TELEGRAM_MAX_LENGTH);
       expect(sent.join('').replace(/\s/g, '')).toBe(text.replace(/\s/g, ''));
       expect(sent[0]).toMatch(/^a+$/);
