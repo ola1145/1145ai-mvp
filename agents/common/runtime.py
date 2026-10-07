@@ -118,14 +118,20 @@ def bind_tools(factory: Callable[..., list], *args: Any, **context: Any) -> list
 #
 # A propose tool returns text for the model. When what the owner will confirm must reach them word for word, the tool
 # returns a str that also carries `must_say` (exact strings the reply has to contain) and `say` (the server's own line).
-# The model writes the reply, so it can drift: reword the summary, mistype the code. The guard checks the final reply and,
-# if it drifted, sends the server's line instead. Tools that don't set these attributes are not affected.
+# The model writes the reply, so it can drift: reword the summary, mistype the code, swap or add a link. The guard checks
+# the final reply and, if it drifted, sends the server's line instead. Tools that don't set these attributes are not
+# affected. The onboarding agent uses the same guard for the card link (D9).
 
 _CONFIRM_CODE = re.compile(r"\bCONFIRM\s+(\d{4})\b", re.I)
+_LINK = re.compile(r"https?://[^\s<>\"'`]+", re.I)
 
 
 def _norm(text: str) -> str:
     return " ".join(text.lower().split())
+
+
+def _links(text: str) -> set[str]:
+    return {m.group(0).rstrip(".,;:!?)]}*_") for m in _LINK.finditer(text)}
 
 
 def wrap_tool(fn: Callable[..., Any], sink: list) -> Callable[..., Any]:
@@ -150,7 +156,9 @@ def enforce_relay(reply: str, proposals: Iterable[Any]) -> str:
     allowed_codes = {m.group(1) for s in required for m in _CONFIRM_CODE.finditer(s)}
     missing = [s for s in required if _norm(s) not in text]
     foreign = {m.group(1) for m in _CONFIRM_CODE.finditer(reply)} - allowed_codes
-    if not missing and not foreign:
+    # A link the owner is meant to tap must be the server's, and nothing else may ride along next to it.
+    foreign_links = _links(reply) - {link for s in required for link in _links(s)}
+    if not missing and not foreign and not foreign_links:
         return reply
     log.warning("reply drifted from the server's summary; sending the server's line")
     return "\n".join(p.say for p in proposals)

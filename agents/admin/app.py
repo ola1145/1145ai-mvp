@@ -32,14 +32,16 @@ MODEL_ID = os.environ.get("MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1
 @app.entrypoint
 def invoke(payload: dict, context=None) -> dict:
     turn = admin_turn(payload, context)
-    tz, _known = business_clock(payload)
+    tz, known = business_clock(payload)
     proposals: list = []
     apis: list[HttpApi] = []
 
     def make_agent(session_manager):
         api = HttpApi(os.environ["TOOL_API_URL"], payload["tenantToken"])
         apis.append(api)
-        fns = bind_tools(make_admin_tools, api, now=lambda: datetime.now(tz))
+        # The default zone is fine for saying "tomorrow", never for writing the tenant's hours: only a zone the router
+        # sent goes into a change.
+        fns = bind_tools(make_admin_tools, api, now=lambda: datetime.now(tz), business_timezone=tz.key if known else None)
         tools = [tool(wrap_tool(fn, proposals)) for fn in fns]
         system = f"{SYSTEM}\n\n{clock_line(datetime.now(tz), tz)}"
         return Agent(model=BedrockModel(model_id=MODEL_ID), system_prompt=system, tools=tools, session_manager=session_manager)

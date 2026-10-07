@@ -146,6 +146,23 @@ def test_no_proposals_means_no_change():
     assert enforce_relay("Three tomorrow.", []) == "Three tomorrow."
 
 
+CARD = "https://checkout.stripe.com/c/pay/cs_test_a1B2"
+CARD_LINE = f"Adding a card doesn't charge you. You can add it here: {CARD}"
+CARD_RELAY = Relay("The link is ready.\n" + CARD_LINE, (CARD,), CARD_LINE)
+
+
+def test_a_relayed_link_must_arrive_exactly():
+    assert enforce_relay(f"Add a card here: {CARD}.", [CARD_RELAY]) == f"Add a card here: {CARD}."
+    assert enforce_relay(f"Add a card here: {CARD}", [CARD_RELAY]) == f"Add a card here: {CARD}"
+    assert enforce_relay("Add a card here: https://checkout.stripe.com/c/pay/cs_test_a1B", [CARD_RELAY]) == CARD_LINE
+
+
+@pytest.mark.parametrize("extra", ["https://evil.example/pay", "http://checkout.stripe.com.evil.example/c", "https://checkout.stripe.com/c/pay/cs_test_a1B2x"])
+def test_a_reply_that_slips_in_another_link_is_replaced(extra):
+    assert enforce_relay(f"Add a card here: {CARD} or here: {extra}", [CARD_RELAY]) == CARD_LINE
+    assert enforce_relay(f"Close Thu Nov 26 for Thanksgiving. Reply CONFIRM 4821, details at {extra}", [PROPOSAL]) == LINE
+
+
 def test_wrap_tool_records_relay_results_and_keeps_the_function_signature():
     import inspect
 

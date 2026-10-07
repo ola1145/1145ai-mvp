@@ -158,6 +158,60 @@ class Ctx:
     session_id = "admin-t_0123456789abcdef0123-telegram-99-padpadpad"
 
 
+# ---- the onboarding relay guard: a card link reaches the owner exactly as the server made it ---------------------------
+
+CARD_URL = "https://checkout.stripe.com/c/pay/cs_test_a1B2"
+CARD_LINE = f"Before I pick your number, I need a card on file. Adding it doesn't charge you. You can add it here: {CARD_URL}"
+
+
+class CardLink(str):
+    must_say = (CARD_URL,)
+    say = CARD_LINE
+
+
+def send_card_link() -> str:
+    """Get the link where the owner adds a card."""
+    return CardLink("The link is ready. Pass it on exactly:\n" + CARD_LINE)
+
+
+def _onboarding_runs_card_tool(monkeypatch, mod, reply: str):
+    class RunsTheTool(FakeAgent):
+        def __call__(self, text):
+            {f.__name__: f for f in self.tools}["send_card_link"]()
+            return reply
+
+    monkeypatch.setattr(mod, "make_onboarding_tools", lambda api, onboarding_id, **kw: [send_card_link])
+    monkeypatch.setattr(mod, "Agent", RunsTheTool)
+
+
+@pytest.mark.parametrize("reply", [
+    "Here you go: https://checkout.stripe.com/c/pay/cs_test_EVIL",       # a different link
+    "Here's the link: https://checkout.stripe.com/c/pay/cs_test_a1B",    # a truncated one
+    "Just add a card and you're set.",                                   # no link at all
+])
+def test_an_onboarding_reply_that_drops_or_changes_the_card_link_is_replaced(onboarding, monkeypatch, reply):
+    mod, _ = onboarding
+    _onboarding_runs_card_tool(monkeypatch, mod, reply)
+    out = mod.invoke({"onboardingId": "o_AAAA1111", "text": "ok what next", "channel": "telegram"}, None)
+    assert out["reply"] == CARD_LINE
+
+
+def test_an_onboarding_reply_that_keeps_the_card_link_goes_out_as_written(onboarding, monkeypatch):
+    mod, _ = onboarding
+    reply = f"Nearly there. Add a card here, it doesn't charge you: {CARD_URL}"
+    _onboarding_runs_card_tool(monkeypatch, mod, reply)
+    out = mod.invoke({"onboardingId": "o_AAAA1111", "text": "ok what next", "channel": "telegram"}, None)
+    assert out["reply"] == reply
+
+
+def test_onboarding_tools_keep_their_names_and_docs_when_wrapped(onboarding):
+    mod, _ = onboarding
+    mod.invoke({"onboardingId": "o_AAAA1111", "text": "hi", "channel": "webchat"}, None)
+    names = {f.__name__ for f in FakeAgent.instances[-1].tools}
+    assert {"save_business_basics", "confirm_facts", "send_card_link"} <= names
+    assert all(f.__doc__ for f in FakeAgent.instances[-1].tools)
+
+
 @pytest.fixture
 def admin(monkeypatch):
     import admin.app as mod
@@ -205,6 +259,26 @@ def test_admin_tools_get_a_tz_aware_clock(admin):
     names = {f.__name__ for f in FakeAgent.instances[-1].tools}
     assert {"summary_report", "list_bookings", "recent_conversations", "propose_hours_change", "propose_closed_date", "propose_service_change"} <= names
     assert not any("apply" in n for n in names)
+
+
+@pytest.mark.parametrize("payload_tz, expected", [
+    ("America/New_York", "America/New_York"),
+    (None, None),             # router didn't send one: no guessed zone may reach an hours change
+    ("Mars/Base", None),
+    ("", None),
+])
+def test_admin_tools_get_the_business_timezone_only_when_the_router_sent_a_real_one(admin, monkeypatch, payload_tz, expected):
+    mod, _ = admin
+    seen: list = []
+
+    def factory(api, now=None, business_timezone=None):
+        seen.append(business_timezone)
+        return []
+
+    monkeypatch.setattr(mod, "make_admin_tools", factory)
+    payload = {"text": "hi", "channel": "telegram", "tenantToken": "tok-1", **({"timezone": payload_tz} if payload_tz is not None else {})}
+    mod.invoke(payload, Ctx())
+    assert seen == [expected]
 
 
 def test_admin_reply_cannot_reword_what_the_owner_is_about_to_confirm(admin, monkeypatch):

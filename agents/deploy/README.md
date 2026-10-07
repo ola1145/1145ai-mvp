@@ -14,9 +14,11 @@ The admin tenant token and the onboarding id arrive in the payload the router bu
 
 Payload fields the agents read (all from the router, none from the model):
 - onboarding: `onboardingId` (required), `text`, `channel` (`telegram` or `webchat`), `displayName`, `messageId`. `messageId` is the
-  owner's channel message id; it is sent as `X-1145-Message-Id` so facts decisions are auditable (D3-1).
+  owner's channel message id; it is sent as `X-1145-Message-Id` so facts decisions are auditable (D3-1). `text` is also bound
+  into the tools: a website fact is approved only when it is the owner's own clear yes (SEC-05).
 - admin: `tenantToken` (required), `text`, `channel`, `timezone` (the tenant's IANA zone). `timezone` gives the copilot the business
-  clock (A3-1); without it the copilot assumes `America/Chicago`. See `contracts/CHANGE_REQUESTS/A1-2.md`.
+  clock (A3-1); without it the copilot assumes `America/Chicago` for "tomorrow", but never writes that guess into an hours change
+  (A3-3). See `contracts/CHANGE_REQUESTS/A1-2.md`.
 
 ## Onboarding credentials (SEC-22)
 The onboarding API accepts only a short-lived token that names one onboarding. Each turn the agent mints one (15 minutes at most) from
