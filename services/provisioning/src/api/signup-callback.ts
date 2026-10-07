@@ -103,8 +103,9 @@ export function makeHandler(deps: SignupCallbackDeps) {
 
       const consumed = await deps.signups.consume(hash, nowSeconds, { record: view.record, googleSub: identity.sub, email: identity.email });
       if (!consumed) {
-        // Someone else got there first (or a newer link replaced this one) between the look and the write.
-        return deadLink(await deps.signups.peek(hash), nowSeconds) ?? page(410, pageCopy.replaced);
+        // Someone else got there first, a newer link replaced this one, or the identity was confirmed in the meantime:
+        // either way this link has done its job.
+        return deadLink(await deps.signups.peek(hash), nowSeconds) ?? page(409, pageCopy.used);
       }
 
       try {

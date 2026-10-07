@@ -326,6 +326,18 @@ describe('signup callback (GET /signup/callback)', () => {
     expect(await w.bindings.get('onb_1')).toMatchObject({ status: 'confirmed', googleSub: A.sub, email: A.email });
   });
 
+  it('a link asked for while a sign-in waits for its YES cannot rebind the identity once that YES lands', async () => {
+    await w.callback({ code: 'code-a', state: w.lastToken() }); // A signed in and is waiting for the owner's YES
+    await w.requestLink();                                      // the owner asks for another link before answering
+    const spare = w.lastToken();
+    await answerPendingBinding({ onboardingId: 'onb_1', channel: 'telegram', channelUserId: '777', text: 'YES' }, w.bindings, w.nowSec());
+
+    const late = await w.callback({ code: 'code-b', state: spare });
+    expect(late.statusCode).toBe(409);
+    expect(await w.bindings.get('onb_1')).toMatchObject({ status: 'confirmed', googleSub: A.sub, email: A.email });
+    expect(w.sent.filter((s) => s.text.includes('signed in'))).toHaveLength(1);
+  });
+
   it('a YES from anyone but the chat that asked for the link confirms nothing', async () => {
     await w.callback({ code: 'code-b', state: w.lastToken() }); // a stranger got there first with a forwarded link
     for (const who of [{ channel: 'telegram', channelUserId: '999' }, { channel: 'webchat', channelUserId: '777' }]) {
