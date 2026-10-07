@@ -13,6 +13,22 @@ recorded until the owner runs the steps below in dev. Do not paste estimates int
   provisioned concurrency (2) in prod. In dev, add `-c voiceProvisioned=true` to compare provisioned against on-demand.
 - Voice handlers do at most one `Get`, one `Query` and (for booking) one `TransactWrite` per call.
 
+## Wiring switches (cdk context, none required)
+
+| Context | Effect |
+|---|---|
+| `-c toolApiThrottleRps=<n>` / `-c toolApiThrottleBurst=<n>` | Stage-wide throttle on the tool API (default 200 rps, burst 400). A value below 1 or not a number is ignored. |
+| `-c dashboardOrigins=https://app.example.com,...` | CORS for the dashboard, exposing `X-Next-Cursor` and `Retry-After`. Off until set. https origins only. |
+| `-c knowledgeVectorBucket=<name> -c knowledgeVectorIndex=<name>` | Turns on S3 Vectors knowledge search for the kb/search function only: sets `KNOWLEDGE_VECTOR_BUCKET` / `KNOWLEDGE_VECTOR_INDEX`, and grants `s3vectors:QueryVectors` and `GetVectors` on that index plus `bedrock:InvokeModel` on Titan Text Embeddings V2. Without them the function answers from keyword search. Needs `@aws-sdk/client-s3vectors` and `@aws-sdk/client-bedrock-runtime` in the Lambda runtime or bundle (CR T7-3). |
+| `-c knowledgeEmbedDimensions=<n>` | Titan embedding size when the index was not created with 1024. |
+
+Secrets: the tool API secret holds `tokenCurrent`, `tokenPrevious`, `engineSecret` and, for owner price edits,
+`stepUpCurrent` / `stepUpPrevious` (a different value from the token keys; `deps.ts` ignores a match). Without a step-up
+key, price edits answer 428.
+
+Every function carries `TOOL_API_ROUTE=<handler file name>`, the `Route` dimension of the `ToolLatencyMs` metric that
+`lib/http.ts` publishes (CR P7-2), which the per-route p95 alarms read.
+
 ## 1. Integration tests against DynamoDB Local
 
 These cover the book transaction, slot conflict, idempotent replay, a concurrent race, tenant partition separation, GSI
@@ -70,8 +86,10 @@ aws dynamodb get-item --table-name <dev table> --key '{"PK":{"S":"TENANT#<tenant
 aws dynamodb get-item --table-name <dev table> --key '{"PK":{"S":"NUMBER#+12145550100"},"SK":{"S":"ROUTE"}}'    # AccessDeniedException
 ```
 
-Record the date and the result here. Also confirm the Lambda role itself cannot read `TENANT#...` items directly
-(only route items via `grantRouteRead`).
+Record the date and the result here. Also confirm the Lambda role itself cannot read `TENANT#...` items directly,
+and that each function reads only its own route items (SEC-11): the number resolver `NUMBER#`, the widget resolver
+`WIDGET#`, the customer tools `ENGINEAGENT#` (ElevenAgents agent lookup), the admin functions nothing. A tool function
+trying `SIGNUP#`, `REFERRAL#` or `IDENTITY#` must get `AccessDeniedException`.
 
 | Date | Allowed own tenant | Denied other tenant | Denied route items | Checked by |
 |---|---|---|---|---|
