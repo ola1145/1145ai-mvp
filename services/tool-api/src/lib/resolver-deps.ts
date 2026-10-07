@@ -156,8 +156,8 @@ export function createResolverDeps(ports: ResolverPorts): ResolverDeps {
     routeForNumber: async (e164) => toRoute(await ports.numberRoute(e164)),
     routeForWidget: async (widgetKey) => {
       const item = await ports.widgetRoute(widgetKey);
-      // Absent = enabled (the item itself is the grant). Anything other than an explicit `true` is a disabled widget.
-      if (item && item.enabled !== undefined && item.enabled !== true) return undefined;
+      // Fail closed, and read it the same way the token endpoint does: only an explicit `enabled: true` opens a widget.
+      if (item?.enabled !== true) return undefined;
       return toRoute(item);
     },
     runtimeConfig: (tid) => runtime(tid),

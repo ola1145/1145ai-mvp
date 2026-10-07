@@ -191,6 +191,15 @@ describe('resolveWidget: the widget key decides the tenant', () => {
     expect(store.reads.profile).toBe(0);
   });
 
+  it('only an explicit enabled: true opens a widget (same reading as the token endpoint, so the two never disagree)', async () => {
+    const { deps, store } = setup();
+    for (const enabled of [undefined, null, 'true', 1, 'yes', {}]) {
+      store.widgets.set(WIDGET, enabled === undefined ? { tid: TID_A } : { tid: TID_A, enabled });
+      await expect(resolveWidget(widgetReq(), deps), String(enabled)).rejects.toMatchObject({ status: 404 });
+    }
+    expect(store.reads.profile).toBe(0);
+  });
+
   it('answers 404 for an unknown key, and for a key that cannot be one of ours without touching the table', async () => {
     const { deps, store } = setup();
     await expect(resolveWidget(widgetReq({ widgetKey: 'wk_AAAAAAAAAAAAAAAA' }), deps)).rejects.toMatchObject({ status: 404 });
