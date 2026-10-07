@@ -378,7 +378,13 @@ export function makeHandler(deps: ProvisioningDeps) {
     let attempt = 1;
     const prior = state.provisioning;
     if (prior) {
-      const existing = await deps.workflow.describe(prior.executionName);
+      let existing: ExecutionInfo | undefined;
+      try {
+        existing = await deps.workflow.describe(prior.executionName);
+      } catch (err) {
+        console.error(JSON.stringify({ level: 'error', msg: 'describe execution failed', onboardingId: id, err: String(err) }));
+        return fail(503, 'unavailable', 'Could not check on setup just now.');
+      }
       if (existing) {
         const outcome = outcomeOf(existing);
         if (outcome !== 'failed') return json(200, { state: outcome === 'done' ? 'done' : 'running', alreadyStarted: true, attempt: prior.attempt });

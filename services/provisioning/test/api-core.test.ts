@@ -242,10 +242,15 @@ describe('onboarding service token', () => {
     expect(mem.writes).toEqual([]);
   });
 
-  it('refuses to run with no keys at all', async () => {
+  it('refuses to run with no keys at all, or with a key too short to mean anything', async () => {
     const mem = memoryStore();
-    const handler = makeBasics({ store: mem.store, tokenSecrets: async () => [], now: () => NOW });
-    expect((await handler(apiEvent({ body: GOOD_BASICS }))).statusCode).toBe(500);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const secrets of [[], [''], ['short']]) {
+      const handler = makeBasics({ store: mem.store, tokenSecrets: async () => secrets, now: () => NOW });
+      expect((await handler(apiEvent({ body: GOOD_BASICS, token: mintOnboardingToken(ID, secrets[0] ?? 'x', 300, NOW_SEC) }))).statusCode).toBe(500);
+    }
+    log.mockRestore();
+    expect(mem.writes).toEqual([]);
   });
 });
 
@@ -594,6 +599,18 @@ describe('POST provisioning', () => {
     const r = await t.start({ body: {} });
     expect(r.status).toBe(200);
     expect(r.json).toMatchObject({ state: 'done', alreadyStarted: true });
+    expect(t.wf.startCalls).toHaveLength(1);
+  });
+
+  it('answers 503 when Step Functions cannot be asked about an earlier run', async () => {
+    const t = await withBasics(setup());
+    await t.start({ body: {} });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    t.wf.describe = async () => { throw new Error('states unavailable'); };
+    const r = await t.start({ body: {} });
+    log.mockRestore();
+    expect(r.status).toBe(503);
+    expect(r.json.code).toBe('unavailable');
     expect(t.wf.startCalls).toHaveLength(1);
   });
 
@@ -948,10 +965,14 @@ describe('GET provisioning', () => {
       [build().enter('ActivateTenant').exit('ActivateTenant'), 'SUCCEEDED', { ...WITH_NUMBER }],
     ];
     for (const [h, status, output] of scenarios) collect((await statusFor(h, { status, output })).res.json);
-    const fallback = await withBasics(setup());
-    await fallback.start({ body: {} }); fallback.wf.failHistory = true;
+    // history unreadable: the run's own status still gets a plain line
     const quiet = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    (await fallback.status()).json.progress.forEach((l: string) => all.add(l));
+    for (const status of ['RUNNING', 'SUCCEEDED', 'FAILED'] as const) {
+      const fallback = await withBasics(setup());
+      await fallback.start({ body: {} }); fallback.wf.failHistory = true;
+      fallback.wf.executions.get(ID)!.status = status;
+      (await fallback.status()).json.progress.forEach((l: string) => all.add(l));
+    }
     quiet.mockRestore();
 
     expect(all.size).toBeGreaterThanOrEqual(20);
