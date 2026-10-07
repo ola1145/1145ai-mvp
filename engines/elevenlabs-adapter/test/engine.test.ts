@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { asTenantId, type NumberBinding, type TenantAgentConfig, type TenantId } from '@1145/shared';
-import { ElevenAgentsEngine, UnsupportedEventError, type ElevenAgentsConfig, type RouteStore } from '../src/index.js';
+import {
+  DuplicateEventError, ElevenAgentsEngine, MemoryEventDedupe, SIGNATURE_TOLERANCE_SEC, UnsupportedEventError,
+  type ElevenAgentsConfig, type EventDedupe, type RouteStore,
+} from '../src/index.js';
 
 const rec = JSON.parse(readFileSync(new URL('./fixtures/api-responses.json', import.meta.url), 'utf8'));
 const TENANT = asTenantId('t_brightsmiles01');
@@ -221,5 +224,126 @@ describe('normalizeCallEvent', () => {
   it('rejects other webhook types with UnsupportedEventError so the receiver can acknowledge and drop them', async () => {
     const failure = JSON.stringify(rec.callInitiationFailure);
     await expect(engine().normalizeCallEvent(failure, { 'elevenlabs-signature': sign(failure) })).rejects.toBeInstanceOf(UnsupportedEventError);
+  });
+});
+
+describe('SEC-30: replay window and duplicate deliveries', () => {
+  const sign = (body: string, t = NOW) => `t=${t},v0=${createHmac('sha256', 'wsec').update(`${t}.${body}`).digest('hex')}`;
+  const body = JSON.stringify(rec.postCallTranscription);
+  const engine = (routes = fakeRoutes().routes, seen?: EventDedupe) => new ElevenAgentsEngine(cfg, routes, fakeHttp([]).http, () => NOW, seen);
+
+  it('accepts a signature four minutes old and rejects one six minutes old', async () => {
+    await expect(engine().normalizeCallEvent(body, { 'elevenlabs-signature': sign(body, NOW - 240) })).resolves.toMatchObject({ callId: 'conv_01' });
+    await expect(engine().normalizeCallEvent(body, { 'elevenlabs-signature': sign(body, NOW - 360) })).rejects.toThrow('bad signature');
+  });
+
+  it('drops a second delivery of the same conversation, whether replayed or re-signed', async () => {
+    const e = engine();
+    await e.normalizeCallEvent(body, { 'elevenlabs-signature': sign(body) });
+    await expect(e.normalizeCallEvent(body, { 'elevenlabs-signature': sign(body) })).rejects.toBeInstanceOf(DuplicateEventError);
+    await expect(e.normalizeCallEvent(body, { 'elevenlabs-signature': sign(body, NOW + 5) })).rejects.toMatchObject({ callId: 'conv_01' });
+  });
+
+  it('lets other conversations through', async () => {
+    const e = engine();
+    const other = JSON.stringify({ ...rec.postCallTranscription, data: { ...rec.postCallTranscription.data, conversation_id: 'conv_02' } });
+    await e.normalizeCallEvent(body, { 'elevenlabs-signature': sign(body) });
+    await expect(e.normalizeCallEvent(other, { 'elevenlabs-signature': sign(other) })).resolves.toMatchObject({ callId: 'conv_02' });
+  });
+
+  it('only remembers a conversation after the signature and the tenant check passed', async () => {
+    const e = engine();
+    await expect(e.normalizeCallEvent(body, { 'elevenlabs-signature': sign(body + ' ') })).rejects.toThrow('bad signature');
+    const stranger = JSON.stringify({ ...rec.postCallTranscription, data: { ...rec.postCallTranscription.data, agent_id: 'agent_unknown' } });
+    await expect(e.normalizeCallEvent(stranger, { 'elevenlabs-signature': sign(stranger) })).rejects.toThrow('unknown agent');
+    await expect(e.normalizeCallEvent(body, { 'elevenlabs-signature': sign(body) })).resolves.toMatchObject({ callId: 'conv_01' });
+  });
+
+  it('forgets a conversation on request, so a retry after a failed hand-off is accepted', async () => {
+    const e = engine();
+    await e.normalizeCallEvent(body, { 'elevenlabs-signature': sign(body) });
+    await e.releaseEvent('conv_01');
+    await expect(e.normalizeCallEvent(body, { 'elevenlabs-signature': sign(body) })).resolves.toMatchObject({ callId: 'conv_01' });
+  });
+
+  it('uses a shared store when one is given, keyed by conversation id and held at least as long as the replay window', async () => {
+    const claims: Array<{ key: string; ttlSec: number }> = [];
+    const store: EventDedupe = { claim: async (key, ttlSec) => { claims.push({ key, ttlSec }); return claims.length === 1; } };
+    const e = engine(undefined, store);
+    await e.normalizeCallEvent(body, { 'elevenlabs-signature': sign(body) });
+    await expect(e.normalizeCallEvent(body, { 'elevenlabs-signature': sign(body) })).rejects.toBeInstanceOf(DuplicateEventError);
+    expect(claims.map((c) => c.key)).toEqual(['conv_01', 'conv_01']);
+    expect(claims[0]!.ttlSec).toBeGreaterThanOrEqual(SIGNATURE_TOLERANCE_SEC);
+  });
+
+  it('the in-memory store forgets after its window and stays bounded', async () => {
+    let now = NOW;
+    const mem = new MemoryEventDedupe(() => now, 3);
+    expect(await mem.claim('a', 600)).toBe(true);
+    expect(await mem.claim('a', 600)).toBe(false);
+    now += 601;
+    expect(await mem.claim('a', 600)).toBe(true);
+    for (const k of ['b', 'c', 'd', 'e']) await mem.claim(k, 600);
+    expect(mem.size).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('D8-3: the smoke call id is the id call.ended carries', () => {
+  it('placeSmokeTestCall returns the conversation id that the post-call webhook for that call uses as callId', async () => {
+    const f = fakeHttp([{ body: rec.sipOutboundCall }]);
+    const engine = new ElevenAgentsEngine(cfg, fakeRoutes(BOUND).routes, f.http, () => NOW);
+    const { callId } = await engine.placeSmokeTestCall(REF, '+15125550100', '+15125550199');
+    const raw = JSON.stringify({ ...rec.postCallTranscription, data: { ...rec.postCallTranscription.data, conversation_id: callId } });
+    const header = `t=${NOW},v0=${createHmac('sha256', 'wsec').update(`${NOW}.${raw}`).digest('hex')}`;
+    await expect(engine.normalizeCallEvent(raw, { 'elevenlabs-signature': header })).resolves.toMatchObject({ callId });
+  });
+
+  it('never falls back to the SIP call id, which the webhook does not use', async () => {
+    const f = fakeHttp([{ body: { success: true, message: 'ok', conversation_id: null, sip_call_id: 'sip_123' } }]);
+    await expect(new ElevenAgentsEngine(cfg, fakeRoutes(BOUND).routes, f.http)
+      .placeSmokeTestCall(REF, '+15125550100', '+15125550199')).rejects.toThrow('no conversation id');
+  });
+});
+
+describe('G2-3: the caller number from an inbound call record', () => {
+  const sign = (body: string) => `t=${NOW},v0=${createHmac('sha256', 'wsec').update(`${NOW}.${body}`).digest('hex')}`;
+  const withCall = (phone_call: unknown, transcriptText?: string) => JSON.stringify({
+    ...rec.postCallTranscription,
+    data: {
+      ...rec.postCallTranscription.data,
+      ...(transcriptText ? { transcript: [{ role: 'user', message: transcriptText, time_in_call_secs: 1 }] } : {}),
+      metadata: { ...rec.postCallTranscription.data.metadata, phone_call },
+    },
+  });
+  const run = async (raw: string) => new ElevenAgentsEngine(cfg, fakeRoutes().routes, fakeHttp([]).http, () => NOW)
+    .normalizeCallEvent(raw, { 'elevenlabs-signature': sign(raw) });
+
+  it('returns the external number of an inbound call, normalised to E.164', async () => {
+    const ev = await run(withCall({ direction: 'inbound', type: 'sip_trunking', agent_number: '+15125550100', external_number: '+1 (214) 555-0123' }));
+    expect(ev.callerE164).toBe('+12145550123');
+  });
+
+  it('leaves it out for outbound calls (the external party is the person we dialled), missing, withheld or unusable numbers', async () => {
+    for (const pc of [
+      { direction: 'outbound', external_number: '+12145550123' },
+      { direction: 'inbound' },
+      { direction: 'inbound', external_number: 'anonymous' },
+      { direction: 'inbound', external_number: '+266696687' },
+      { direction: 'inbound', external_number: 12145550123 },
+      { direction: 'inbound', external_number: '+0123' },
+      'not an object',
+      null,
+    ]) {
+      expect(await run(withCall(pc))).not.toHaveProperty('callerE164');
+    }
+  });
+
+  it('never takes a number from the conversation itself', async () => {
+    const ev = await run(withCall(undefined, 'My number is +12145559999'));
+    expect(ev).not.toHaveProperty('callerE164');
+  });
+
+  it('does not touch the recorded fixture result', async () => {
+    expect(await run(JSON.stringify(rec.postCallTranscription))).not.toHaveProperty('callerE164');
   });
 });
