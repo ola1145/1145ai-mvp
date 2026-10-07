@@ -11,7 +11,7 @@
  * the very next call (route item, never cached) and a prompt edit is live within a minute.
  */
 import { GetCommand } from '@aws-sdk/lib-dynamodb';
-import { asTenantId, keys, mintTenantToken, type TenantRuntimeState } from '@1145/shared';
+import { asTenantId, keys, mintTenantToken, type TenantRuntimeState, type TenantTokenClaims } from '@1145/shared';
 import { HttpError, json, type HttpResult } from './http.js';
 
 export type RuntimeState = TenantRuntimeState;
@@ -45,8 +45,9 @@ export const E164 = /^\+[1-9]\d{6,14}$/;
 /** Public by design (it identifies a tenant like a phone number does). Matches contracts/openapi/channels.yaml. */
 export const WIDGET_KEY = /^wk_[A-Za-z0-9]{16,40}$/;
 
-/** Call-scoped token lifetime. A call or chat is short; the worker never refreshes, so this is the upper bound. */
-export const CALL_TOKEN_TTL_SECONDS = 3600;
+/** Call-scoped token lifetime (SEC-08). The worker ends every call and chat after 15 minutes (MAX_CALL_SECONDS) and never
+ *  refreshes a token, so this is that plus a margin for the greeting and a slow close. A leaked token is good for minutes, not an hour. */
+export const CALL_TOKEN_TTL_SECONDS = 20 * 60;
 export const CONFIG_CACHE_MS = 60_000;
 
 const DEFAULT_AGENT_NAME = 'Ava'; // same default the render step uses when the owner has not picked a name
@@ -177,10 +178,13 @@ export async function resolvedCall(
   const [runtime, secret] = await Promise.all([deps.runtimeConfig(tid), deps.signingSecret()]);
   if (!secret) throw new Error('token signing secret is empty');
   const state = stricter(route.state, runtime.state);
-  const token = mintTenantToken(
-    { tid, prn: 'customer-agent', cid: who.callId, ...(who.caller ? { clr: who.caller } : {}), ch: who.channel },
-    secret, CALL_TOKEN_TTL_SECONDS,
-  );
+  // `st` carries the route state the worker is told, so the tool API can refuse booking tools for a suspended or over-cap
+  // tenant even if the worker (or a leaked token) does not (SEC-08; tenant-auth.ts enforces it). TenantTokenClaims in
+  // packages/shared has no `st` yet (CR T5-3), hence the wider local type.
+  const claims: Omit<TenantTokenClaims, 'aud' | 'iat' | 'exp'> & { st: RuntimeState } = {
+    tid, prn: 'customer-agent', cid: who.callId, ...(who.caller ? { clr: who.caller } : {}), ch: who.channel, st: state,
+  };
+  const token = mintTenantToken(claims, secret, CALL_TOKEN_TTL_SECONDS);
   return json(200, { tenantId: tid, token, state, agent: runtime.agent });
 }
 
@@ -233,30 +237,15 @@ export function prodResolverDeps(): Promise<ResolverDeps> {
 }
 
 async function buildProdDeps(): Promise<ResolverDeps> {
-  const [{ DynamoDBClient }, { DynamoDBDocumentClient }, { AssumeRoleCommand, STSClient }, { createTenantDocProvider }, { prodDeps }] = await Promise.all([
-    import('@aws-sdk/client-dynamodb'), import('@aws-sdk/lib-dynamodb'), import('@aws-sdk/client-sts'),
-    import('./ddb-repo.js'), import('../deps.js'),
+  const [{ DynamoDBClient }, { DynamoDBDocumentClient }, { tenantDocFor }, { prodDeps }] = await Promise.all([
+    import('@aws-sdk/client-dynamodb'), import('@aws-sdk/lib-dynamodb'), import('./ddb-repo.js'), import('../deps.js'),
   ]);
   const table = process.env.TABLE_NAME ?? 't1145';
   const routeDoc = DynamoDBDocumentClient.from(new DynamoDBClient({}));
-  const sts = new STSClient({});
-  // Same ABAC recipe as ddb-repo.ts (TenantDataRole + tenant_id session tag, ~14 minute credential cache per tenant).
-  // TODO(T5-2): reuse ddb-repo's cached client once it is exported, so a warm container does one AssumeRole per tenant, not two.
-  const tenantDocFor = createTenantDocProvider({
-    assumeRole: async (tid) => {
-      const roleArn = process.env.TENANT_DATA_ROLE_ARN;
-      if (!roleArn) throw new Error('TENANT_DATA_ROLE_ARN is not set');
-      const r = await sts.send(new AssumeRoleCommand({
-        RoleArn: roleArn, RoleSessionName: `resolve-${tid}`.slice(0, 64), DurationSeconds: 900, Tags: [{ Key: 'tenant_id', Value: tid }],
-      }));
-      const c = r.Credentials;
-      if (!c?.AccessKeyId || !c.SecretAccessKey || !c.SessionToken || !c.Expiration) throw new Error('assume role failed');
-      return { accessKeyId: c.AccessKeyId, secretAccessKey: c.SecretAccessKey, sessionToken: c.SessionToken, expiration: c.Expiration };
-    },
-    makeDoc: (creds) => DynamoDBDocumentClient.from(new DynamoDBClient({ credentials: creds }), { marshallOptions: { removeUndefinedValues: true } }),
-  });
   const auth = await prodDeps();
   return createResolverDeps({
+    // `tenantDocFor` is the one ABAC provider ddb-repo.ts caches for the whole container (TenantDataRole + tenant_id session
+    // tag, ~14 minutes per tenant), so reading PROFILE here costs no AssumeRole of its own (CR T5-2).
     ...ddbItemReaders({ routeDoc, tenantDocFor, table }),
     // tokenSecrets() is [tokenCurrent, tokenPrevious]; new tokens are always signed with the current one.
     signingSecret: async () => {

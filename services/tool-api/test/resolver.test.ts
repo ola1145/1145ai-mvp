@@ -2,11 +2,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyTenantToken } from '@1145/shared';
 import { resolveNumber } from '../src/handlers/internal-resolve-number.js';
 import { resolveWidget } from '../src/handlers/internal-resolve-widget.js';
-import { createResolverDeps, ddbItemReaders, type DocLike, type ResolverPorts } from '../src/lib/resolver-deps.js';
+import { CALL_TOKEN_TTL_SECONDS, createResolverDeps, ddbItemReaders, prodResolverDeps, type DocLike, type ResolverPorts } from '../src/lib/resolver-deps.js';
 import { handle, HttpError, type HttpEvent } from '../src/lib/http.js';
 import { requireTenantContext } from '../src/lib/tenant-auth.js';
 import { checkReply } from '../../../packages/conversation-style/src/index.js';
 import { SECRET } from './fakes.js';
+
+// Production wiring (below) takes its tenant-scoped client from ddb-repo.ts (CR T5-2). The stand-ins let a test see whose client
+// was asked for and count providers built the old way (a second AssumeRole cache of our own), which must stay at zero.
+const ddbRepo = vi.hoisted(() => ({ docFor: undefined as undefined | ((tid: string) => Promise<unknown>), providersBuilt: 0 }));
+vi.mock('../src/lib/ddb-repo.js', () => ({
+  tenantDocFor: (tid: string) => ddbRepo.docFor!(tid),
+  createTenantDocProvider: () => { ddbRepo.providersBuilt++; return (tid: string) => ddbRepo.docFor!(tid); },
+}));
+vi.mock('../src/deps.js', async () => {
+  const { SECRET: secret } = await import('./fakes.js');
+  return { prodDeps: async () => ({ tokenSecrets: async () => [secret, 'previous-secret'] }) };
+});
 
 type Item = Record<string, unknown>;
 
@@ -83,6 +95,40 @@ describe('resolveNumber: the dialed number decides the tenant', () => {
       { tokenSecrets: async () => [SECRET], engineSecret: async () => undefined, tenantForEngineAgent: async () => undefined },
     );
     expect(ctx).toMatchObject({ tenantId: TID_A, principal: 'customer-agent', channel: 'voice', callId: 'v3:call-7f3a', callerE164: CALLER });
+  });
+
+  it('lets the token live about as long as the longest call, not an hour (SEC-08)', async () => {
+    const { deps } = setup();
+    const { token } = JSON.parse((await resolveNumber(numberReq(), deps)).body);
+    const c = claims(token);
+    expect(c.exp - c.iat).toBe(CALL_TOKEN_TTL_SECONDS);
+    expect(CALL_TOKEN_TTL_SECONDS).toBeGreaterThanOrEqual(15 * 60 + 60); // a call is capped at 15 minutes; leave a margin
+    expect(CALL_TOKEN_TTL_SECONDS).toBeLessThanOrEqual(20 * 60);
+  });
+
+  it('carries the route state in the token, so the tool API can refuse booking tools for a suspended or over-cap tenant (SEC-08)', async () => {
+    const { deps, store } = setup();
+    const st = async () => (claims(JSON.parse((await resolveNumber(numberReq(), deps)).body).token) as { st?: string }).st;
+    expect(await st()).toBe('active');
+    store.numbers.set(DIALED, { tid: TID_A, state: 'suspended' });
+    expect(await st()).toBe('suspended');
+    store.numbers.set(DIALED, { tid: TID_A, state: 'over_cap' });
+    expect(await st()).toBe('over_cap');
+    store.numbers.set(DIALED, { tid: TID_A, state: 'banana' }); // unrecognised: fail closed, same as the response
+    expect(await st()).toBe('suspended');
+    store.numbers.set(DIALED, { tid: TID_A, state: 'active' });
+    store.profiles.set(TID_A, profile(TID_A, { state: 'suspended' })); // the stricter of route and profile wins
+    store.clock += 61_000; // past the 60 s profile cache
+    expect(await st()).toBe('suspended');
+  });
+
+  it('puts in the token the same state it tells the worker', async () => {
+    const { deps, store } = setup();
+    for (const state of ['active', 'over_cap', 'suspended']) {
+      store.numbers.set(DIALED, { tid: TID_A, state });
+      const body = JSON.parse((await resolveNumber(numberReq(), deps)).body);
+      expect((claims(body.token) as { st?: string }).st).toBe(body.state);
+    }
   });
 
   it('answers 404 for a number nobody owns and never reads a profile for it', async () => {
@@ -182,6 +228,15 @@ describe('resolveWidget: the widget key decides the tenant', () => {
     expect(ctx).toMatchObject({ tenantId: TID_A, principal: 'customer-agent', channel: 'webchat', callId: ROOM });
     expect(ctx.callerE164).toBeUndefined();
     await expect(requireTenantContext(req, 'applyChange', auth)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('gives a chat token the same short lifetime and carries the state (SEC-08)', async () => {
+    const { deps, store } = setup();
+    const c = claims(JSON.parse((await resolveWidget(widgetReq(), deps)).body).token) as { exp: number; iat: number; st?: string };
+    expect(c.exp - c.iat).toBe(CALL_TOKEN_TTL_SECONDS);
+    expect(c.st).toBe('active');
+    store.widgets.set(WIDGET, { tid: TID_A, enabled: true, state: 'over_cap' });
+    expect((claims(JSON.parse((await resolveWidget(widgetReq(), deps)).body).token) as { st?: string }).st).toBe('over_cap');
   });
 
   it('answers 404 for a disabled widget', async () => {
@@ -405,6 +460,23 @@ describe('ddbItemReaders: which keys are read, and with whose credentials', () =
     await expect(readers.widgetRoute('wk_x#y')).resolves.toBeUndefined();
     await expect(readers.numberRoute('NUMBER#+1')).resolves.toBeUndefined();
     expect(route.sent).toEqual([]);
+  });
+});
+
+describe('production wiring', () => {
+  it('reads PROFILE through the one tenant client provider ddb-repo exports, not a second AssumeRole cache (CR T5-2)', async () => {
+    const asked: string[] = [];
+    ddbRepo.docFor = async (tid) => { asked.push(tid); return { send: async () => ({ Item: profile(tid) }) }; };
+    ddbRepo.providersBuilt = 0;
+    const deps = await prodResolverDeps();
+    const runtime = await deps.runtimeConfig(TID_A);
+    expect(runtime.agent.businessName).toBe('Kemi Cuts');
+    expect(asked).toEqual([TID_A]);
+    expect(ddbRepo.providersBuilt).toBe(0);
+  });
+
+  it('signs with the current tool API secret, never the previous one', async () => {
+    expect(await (await prodResolverDeps()).signingSecret()).toBe(SECRET);
   });
 });
 
