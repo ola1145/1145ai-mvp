@@ -9,7 +9,7 @@ import { processBatch } from '../src/router-worker.js';
 import type { InboundMessage } from '../src/lib/types.js';
 import { verifyTenantToken } from '@1145/shared';
 import { checkReply } from '../../../packages/conversation-style/src/index.js';
-import { APPLIED_LINE, CODE_NOT_FOUND_LINE, HOLDING_LINES, PAUSED_LINE, SNAG_LINES, STEP_UP_LINE } from '../src/lib/copy.js';
+import { APPLIED_LINE, CODE_NOT_FOUND_LINE, HOLDING_LINES, PAUSED_LINE, RATE_LIMIT_LINES, SNAG_LINES, STEP_UP_LINE } from '../src/lib/copy.js';
 import { runtimeSessionId } from '../src/lib/session.js';
 import { createAgentInvoker } from '../src/lib/agentcore.js';
 import { createStore } from '../src/lib/store.js';
@@ -270,6 +270,41 @@ describe('routeInbound', () => {
     });
   });
 
+  // SEC-25 / AB-3 / CR C3-1 section 3: every accepted owner message can become a paid agent run, so one identity cannot send unlimited ones.
+  describe('per-identity message cap', () => {
+    it('says so once, in plain words, when an identity is over the cap, and runs no agent', async () => {
+      const { d, calls, sent } = routerDeps(undefined, { checkRate: async () => 'notice' });
+      const result = await routeInbound(msg, d);
+      expect(result.agent).toBe('none');
+      expect(calls).toHaveLength(0);
+      expect(sent).toHaveLength(1);
+      expect(RATE_LIMIT_LINES as readonly string[]).toContain(sent[0]!.text);
+    });
+
+    it('stays quiet for the messages after that one, so a flood does not become a flood of replies', async () => {
+      const { d, calls, sent } = routerDeps(undefined, { checkRate: async () => 'drop' });
+      await routeInbound(msg, d);
+      expect(calls).toHaveLength(0);
+      expect(sent).toHaveLength(0);
+    });
+
+    it('does not touch the cap for a replayed message or for messages under it', async () => {
+      let checks = 0;
+      const { d, calls } = routerDeps(undefined, { checkRate: async () => { checks++; return 'ok'; } });
+      await routeInbound(msg, d);
+      await routeInbound(msg, d);
+      expect(checks).toBe(1);
+      expect(calls).toHaveLength(1);
+    });
+
+    it('completes a capped message so the queue does not redeliver it', async () => {
+      const done: string[] = [];
+      const { d } = routerDeps(undefined, { checkRate: async () => 'drop', completeMessage: async (m) => { done.push(m.channelMessageId); } });
+      await routeInbound(msg, d);
+      expect(done).toEqual(['u-2']);
+    });
+  });
+
   describe('replies carry the id of the message they answer (CR C3-2)', () => {
     it('puts the inbound message id on every reply target, including holding lines', async () => {
       const { d, sent } = routerDeps(undefined, { invokeAgent: async () => { await new Promise((r) => setTimeout(r, 60)); return 'The real answer.'; } });
@@ -317,7 +352,7 @@ describe('routeInbound', () => {
 });
 
 describe('router copy follows conversation-style', () => {
-  it.each([...HOLDING_LINES, ...SNAG_LINES, PAUSED_LINE, APPLIED_LINE, CODE_NOT_FOUND_LINE, STEP_UP_LINE])('%s', (line) => {
+  it.each([...HOLDING_LINES, ...SNAG_LINES, ...RATE_LIMIT_LINES, PAUSED_LINE, APPLIED_LINE, CODE_NOT_FOUND_LINE, STEP_UP_LINE])('%s', (line) => {
     expect(checkReply(line, { channel: 'chat' })).toEqual([]);
   });
 });
@@ -490,6 +525,70 @@ describe('store', () => {
     expect(await store.claimMessage(msg)).toBe(true);
     await store.releaseMessage(msg);
     expect(await store.claimMessage(msg)).toBe(true);
+  });
+});
+
+describe('store.checkRate (per-identity cap, SEC-25)', () => {
+  /** A counter table: ADD n, and the key and ttl the router wrote. */
+  function counterDoc() {
+    const rows = new Map<string, { n: number; ttl?: unknown }>();
+    return {
+      rows,
+      async send(cmd: unknown): Promise<unknown> {
+        if (!(cmd instanceof UpdateCommand)) throw new Error('only counter updates expected');
+        const key = `${cmd.input.Key!.PK}|${cmd.input.Key!.SK}`;
+        const row = rows.get(key) ?? { n: 0 };
+        row.n += (cmd.input.ExpressionAttributeValues as Record<string, number>)[':one']!;
+        row.ttl = (cmd.input.ExpressionAttributeValues as Record<string, unknown>)[':ttl'];
+        rows.set(key, row);
+        return { Attributes: { n: row.n } };
+      },
+    };
+  }
+  const at = { value: new Date('2026-10-02T12:00:10Z') };
+  const make = (doc: { send(c: unknown): Promise<unknown> } = counterDoc(), perMinute = 3) =>
+    ({ doc, store: createStore({ doc, tableName: 't1145', now: () => at.value, rateLimit: { perMinute } }) });
+
+  it('lets the first few through, says so once, then goes quiet, and starts fresh the next minute', async () => {
+    const { store } = make();
+    const verdicts: string[] = [];
+    for (let i = 0; i < 6; i++) verdicts.push(await store.checkRate(msg));
+    expect(verdicts).toEqual(['ok', 'ok', 'ok', 'notice', 'drop', 'drop']);
+    at.value = new Date('2026-10-02T12:01:05Z');
+    expect(await store.checkRate(msg)).toBe('ok');
+    at.value = new Date('2026-10-02T12:00:10Z');
+  });
+
+  it('counts each identity on its own, per channel', async () => {
+    const { store } = make();
+    for (let i = 0; i < 4; i++) await store.checkRate(msg);
+    expect(await store.checkRate({ ...msg, channelUserId: 'someone-else' })).toBe('ok');
+    expect(await store.checkRate({ ...msg, channel: 'webchat' })).toBe('ok');
+  });
+
+  it('keys the counter by a hash of the sender under RATELIMIT#, with a ttl, and never stores the raw id', async () => {
+    const { doc, store } = make();
+    await store.checkRate(msg);
+    const entries = [...doc.rows.entries()];
+    expect(entries).toHaveLength(1);
+    const [key, row] = entries[0]!;
+    expect(key).toMatch(/^RATELIMIT#chat#telegram#[0-9a-f]{32}\|W#\d+$/);
+    expect(key).not.toContain(msg.channelUserId);
+    expect(row.ttl as number).toBeGreaterThan(Math.floor(at.value.getTime() / 1000));
+  });
+
+  it('fails open: if the counter cannot be written, the owner is not locked out', async () => {
+    const { store } = make({ send: async () => { throw new Error('throttled'); } });
+    expect(await store.checkRate(msg)).toBe('ok');
+  });
+
+  it('defaults to a cap no real owner reaches by typing (20 a minute)', async () => {
+    const doc = counterDoc();
+    const store = createStore({ doc, tableName: 't1145', now: () => at.value });
+    const verdicts: string[] = [];
+    for (let i = 0; i < 21; i++) verdicts.push(await store.checkRate(msg));
+    expect(verdicts.slice(0, 20).every((v) => v === 'ok')).toBe(true);
+    expect(verdicts[20]).toBe('notice');
   });
 });
 
@@ -822,5 +921,7 @@ describe('ChannelsStack wiring', () => {
     expect(statements.some((s) => actionsOf(s).includes('kms:GenerateDataKey*'))).toBe(true);
     // The binding the router settles (SEC-20) lives under ONBOARDING#, which the router already holds.
     expect(grantedOn(template, 'RouterWorker', 'ONBOARDING#*')).toEqual(expect.arrayContaining(['dynamodb:GetItem', 'dynamodb:UpdateItem']));
+    // The per-identity message cap counts under RATELIMIT#, with that one action (SEC-25).
+    expect(grantedOn(template, 'RouterWorker', 'RATELIMIT#*')).toEqual(['dynamodb:UpdateItem']);
   });
 });

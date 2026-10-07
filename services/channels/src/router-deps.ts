@@ -25,8 +25,11 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
   return v;
 }
 
-/** What is deployed: every dependency, including the deterministic YES / NO for the pending identity binding (SEC-20). */
-export type ProdRouterDeps = RouterDeps & Required<Pick<RouterDeps, 'answerPendingBinding'>>;
+/**
+ * What is deployed: every dependency, including the deterministic YES / NO for the pending identity binding (SEC-20) and the
+ * per-identity message cap (SEC-25). Both are optional on `RouterDeps` so test fakes can leave them out; here they are not.
+ */
+export type ProdRouterDeps = RouterDeps & Required<Pick<RouterDeps, 'answerPendingBinding' | 'checkRate'>>;
 
 export function createProdDeps(env: NodeJS.ProcessEnv = process.env): ProdRouterDeps {
   const region = env.AWS_REGION ?? 'us-east-1';

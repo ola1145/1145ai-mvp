@@ -12,6 +12,8 @@ export interface StoreConfig {
   tableName: string;
   now?: () => Date;
   newId?: () => string;
+  /** Per-identity cap (SEC-25). Default 20 messages a minute: more than anyone types, far less than a script sends. */
+  rateLimit?: { perMinute?: number };
 }
 
 /** Same pattern as POST /v1/owner-chat/messages and /r/{code} in contracts/openapi/channels.yaml. */
@@ -24,12 +26,24 @@ const onboardingPk = (id: string) => `ONBOARDING#${id}`;
 const dedupPk = (msg: Pick<InboundMessage, 'channel' | 'channelUserId' | 'channelMessageId'>) =>
   `MSGDEDUP#${msg.channel}#${createHash('sha256').update(`${msg.channelUserId}\n${msg.channelMessageId}`).digest('hex')}`;
 
+const DEFAULT_MESSAGES_PER_MINUTE = 20;
+const RATE_WINDOW_SECONDS = 60;
+const RATE_KEEP_SECONDS = 3600;
+// Same key family as the web chat token's counters (RATELIMIT#webchat#...), a different sub-family, so both fit one IAM prefix.
+const rateKey = (msg: Pick<InboundMessage, 'channel' | 'channelUserId'>, windowStart: number) => ({
+  PK: `RATELIMIT#chat#${msg.channel}#${createHash('sha256').update(msg.channelUserId).digest('hex').slice(0, 32)}`,
+  SK: `W#${windowStart}`,
+});
+
 const errName = (e: unknown) => (e as { name?: string })?.name;
 
-type StoreDeps = Pick<RouterDeps, 'lookupIdentity' | 'startOnboarding' | 'claimMessage' | 'completeMessage' | 'releaseMessage'>;
+type StoreDeps =
+  Pick<RouterDeps, 'lookupIdentity' | 'startOnboarding' | 'claimMessage' | 'completeMessage' | 'releaseMessage'>
+  & Required<Pick<RouterDeps, 'checkRate'>>;
 
 export function createStore(cfg: StoreConfig): StoreDeps {
   const now = cfg.now ?? (() => new Date());
+  const perMinute = cfg.rateLimit?.perMinute ?? DEFAULT_MESSAGES_PER_MINUTE;
   const newId = cfg.newId ?? (() => `o_${randomUUID().replace(/-/g, '').slice(0, 20)}`);
   const TableName = cfg.tableName;
   const nowSec = () => Math.floor(now().getTime() / 1000);
@@ -97,6 +111,30 @@ export function createStore(cfg: StoreConfig): StoreDeps {
         const existing = await readIdentity(msg.channel, msg.channelUserId);
         if (typeof existing?.onboardingId === 'string') return existing.onboardingId;
         throw new Error('identity route exists without an onboardingId', { cause: err });
+      }
+    },
+
+    /**
+     * One atomic counter per identity per minute. Fails open on any counter error: the cap is a cost brake, and a DynamoDB
+     * hiccup must never turn into an owner who cannot reach their assistant.
+     */
+    async checkRate(msg) {
+      const t = nowSec();
+      const windowStart = t - (t % RATE_WINDOW_SECONDS);
+      try {
+        const r = (await cfg.doc.send(new UpdateCommand({
+          TableName, Key: rateKey(msg, windowStart),
+          UpdateExpression: 'SET #ttl = :ttl ADD #n :one',
+          ExpressionAttributeNames: { '#n': 'n', '#ttl': 'ttl' },
+          ExpressionAttributeValues: { ':one': 1, ':ttl': windowStart + RATE_WINDOW_SECONDS + RATE_KEEP_SECONDS },
+          ReturnValues: 'UPDATED_NEW',
+        }))) as { Attributes?: { n?: unknown } };
+        const n = typeof r.Attributes?.n === 'number' ? r.Attributes.n : 0;
+        if (n <= perMinute) return 'ok';
+        return n === perMinute + 1 ? 'notice' : 'drop';
+      } catch (err) {
+        console.error(JSON.stringify({ level: 'warn', message: 'rate counter unavailable, letting the message through', err: errName(err) }));
+        return 'ok';
       }
     },
 

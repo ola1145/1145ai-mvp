@@ -178,6 +178,12 @@ export class ChannelsStack extends Stack {
       resources: [props.data.table.tableArn],
       conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['IDENTITY#*', 'ONBOARDING#*', 'MSGDEDUP#*'] } },
     }));
+    // Per-identity message cap (SEC-25): one atomic counter per sender per minute, nothing else under RATELIMIT#.
+    router.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:UpdateItem'],
+      resources: [props.data.table.tableArn],
+      conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [RATE_LIMIT_COUNTERS] } },
+    }));
     // The table uses a customer-managed key, which the data role needs to read and write items.
     props.data.dataKey.grantEncryptDecrypt(router);
 

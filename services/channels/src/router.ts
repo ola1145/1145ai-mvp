@@ -1,6 +1,6 @@
 import { mintTenantToken } from '@1145/shared';
 import type { InboundMessage } from './lib/types.js';
-import { HOLDING_LINES, PAUSED_LINE, SNAG_LINES, pickLine } from './lib/copy.js';
+import { HOLDING_LINES, PAUSED_LINE, RATE_LIMIT_LINES, SNAG_LINES, pickLine } from './lib/copy.js';
 
 export interface IdentityRoute {
   role: 'owner' | 'staff' | 'onboarding';
@@ -32,6 +32,12 @@ export interface RouterDeps {
    * (`ProdRouterDeps`), so the deployed router cannot lose this step without a compile error.
    */
   answerPendingBinding?(input: { onboardingId: string; channel: string; channelUserId: string; text: string }): Promise<BindingAnswer>;
+  /**
+   * SEC-25 (and AB-3, CR C3-1 section 3): every accepted message can become a paid agent run, so one identity gets a per-minute cap.
+   * 'ok' carries on; 'notice' is the first message over the cap in this minute (say "give me a minute" and run nothing);
+   * 'drop' is every one after it (run nothing, say nothing). Implementations fail open: a counter outage must not lock owners out.
+   */
+  checkRate?(msg: InboundMessage): Promise<'ok' | 'notice' | 'drop'>;
   invokeAgent(agent: 'onboarding' | 'admin', sessionId: string, payload: AgentPayload): Promise<string>;
   /** POST /v1/admin/changes/apply with an OWNER token. Deterministic: the LLM is not in this path. */
   applyChange(code: string, ownerToken: string): Promise<{ ok: boolean; message: string }>;
@@ -92,13 +98,21 @@ export async function routeInbound(msg: InboundMessage, deps: RouterDeps, opts: 
   // One agent invocation per message id, however many times the webhook or the queue delivers it.
   if (!(await deps.claimMessage(msg))) return { agent: 'none', sessionId: 'duplicate' };
   try {
-    const result = await handle(msg, deps, opts);
+    // After the dedup claim, so a replay is never counted twice; before anything that costs money.
+    const rate = (await deps.checkRate?.(msg)) ?? 'ok';
+    const result = rate === 'ok' ? await handle(msg, deps, opts) : await slowDown(msg, deps, rate);
     await deps.completeMessage(msg);
     return result;
   } catch (err) {
     await deps.releaseMessage(msg).catch((e) => log('error', 'release failed', e));
     throw err;
   }
+}
+
+/** Over the per-identity cap: no agent run. The first message over it gets one plain line; the rest get nothing. */
+async function slowDown(msg: InboundMessage, deps: RouterDeps, rate: 'notice' | 'drop'): Promise<RouteResult> {
+  if (rate === 'notice') await deps.send(target(msg), pickLine(RATE_LIMIT_LINES, msg.channelMessageId));
+  return { agent: 'none', sessionId: 'rate-limited' };
 }
 
 async function converse(
