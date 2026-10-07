@@ -3,7 +3,12 @@ import {
   type E164, type EngineAgentRef, type KnowledgeDoc, type NormalizedCallEvent, type NumberBinding,
   type TenantAgentConfig, type TenantId, type TenantRuntimeState, type VoiceEngine,
 } from '@1145/shared';
-import { verifyElevenLabsSignature } from './signature.js';
+import { callerE164FromPhoneCall } from './caller.js';
+import { MemoryEventDedupe, type EventDedupe } from './dedupe.js';
+import { SIGNATURE_TOLERANCE_SEC, verifyElevenLabsSignature } from './signature.js';
+
+export { MemoryEventDedupe, SIGNATURE_TOLERANCE_SEC };
+export type { EventDedupe };
 
 /**
  * ElevenAgents adapter (fallback engine, ADR-0002). Endpoint paths and payload shapes are verified against the
@@ -33,15 +38,33 @@ export class UnsupportedEventError extends Error {
   constructor(readonly eventType: string) { super(`unsupported elevenlabs webhook type: ${eventType}`); }
 }
 
+/**
+ * A signed webhook for a conversation we already delivered (SEC-30). Acknowledge it (200) and drop it: the provider
+ * retries on anything else. If the hand-off of the first delivery failed, call `releaseEvent(callId)` before answering
+ * with an error so the provider's retry is accepted.
+ */
+export class DuplicateEventError extends Error {
+  constructor(readonly callId: string) { super(`duplicate elevenlabs webhook for conversation ${callId}`); }
+}
+
+/** What `normalizeCallEvent` returns: the shared shape plus the caller's number when the call record has one (CR G2-3). */
+export type ElevenCallEvent = NormalizedCallEvent & {
+  /** Carrier caller ID of an inbound call, E.164. Belongs in the stored transcript object, not on the event bus. */
+  callerE164?: string;
+};
+
 type KbLocator = { type: string; id: string; name: string };
 
 const BASE = 'https://api.elevenlabs.io';
+/** A delivery can only be replayed while its signature is fresh, so remember a conversation a little longer than that. */
+const DEDUPE_TTL_SEC = 2 * SIGNATURE_TOLERANCE_SEC;
 
 export class ElevenAgentsEngine implements VoiceEngine {
   readonly id = 'elevenlabs' as const;
   constructor(
     private cfg: ElevenAgentsConfig, private routes: RouteStore, private http: typeof fetch = fetch,
     private nowSec: () => number = () => Math.floor(Date.now() / 1000),
+    private seen: EventDedupe = new MemoryEventDedupe(nowSec),
   ) {}
 
   private async call<T>(path: string, method: string, body?: unknown, opts: { allow404?: boolean } = {}): Promise<T> {
@@ -115,33 +138,55 @@ export class ElevenAgentsEngine implements VoiceEngine {
     await this.call(`/v1/convai/phone-numbers/${binding.engineNumberId}`, 'PATCH', { agent_id });
   }
 
+  /**
+   * `callId` is the ElevenLabs `conversation_id`, which is also `data.conversation_id` on the post-call webhook, so
+   * it is the id `normalizeCallEvent` puts on `call.ended` (D8-3: the smoke call looks the result up by it). The SIP
+   * call id is not the same thing and is never returned in its place: with no conversation id the call could never
+   * be matched to its result, so that is an error.
+   */
   async placeSmokeTestCall(ref: EngineAgentRef, _from: E164, to: E164) {
     const binding = await this.routes.getBinding(ref.tenantId);
     if (!binding?.engineNumberId) throw new Error('number not bound');
-    const r = await this.call<{ success: boolean; message: string; conversation_id?: string; sip_call_id?: string }>(
+    const r = await this.call<{ success: boolean; message: string; conversation_id?: string | null; sip_call_id?: string | null }>(
       '/v1/convai/sip-trunk/outbound-call', 'POST', { agent_id: ref.agentId, agent_phone_number_id: binding.engineNumberId, to_number: to });
     if (!r.success) throw new Error(`elevenlabs smoke call failed: ${r.message}`);
-    return { callId: r.conversation_id ?? r.sip_call_id ?? 'unknown' };
+    if (!r.conversation_id) throw new Error('elevenlabs smoke call placed but returned no conversation id');
+    return { callId: r.conversation_id };
   }
 
-  async normalizeCallEvent(rawBody: string, headers: Record<string, string | undefined>): Promise<NormalizedCallEvent> {
+  /**
+   * Verifies the signature (five-minute window), maps the payload and drops a second delivery of the same
+   * conversation. Order matters: only a validly signed payload for a known agent can use up a conversation id, so
+   * a forged request can't block the real one.
+   */
+  async normalizeCallEvent(rawBody: string, headers: Record<string, string | undefined>): Promise<ElevenCallEvent> {
     const sig = Object.entries(headers).find(([k]) => k.toLowerCase() === 'elevenlabs-signature')?.[1];
-    if (!verifyElevenLabsSignature(rawBody, sig, this.cfg.webhookSecret, 1800, this.nowSec())) throw new Error('bad signature');
+    if (!verifyElevenLabsSignature(rawBody, sig, this.cfg.webhookSecret, SIGNATURE_TOLERANCE_SEC, this.nowSec())) throw new Error('bad signature');
     const p = JSON.parse(rawBody) as {
       type?: string; event_timestamp?: number;
       data?: { agent_id?: string; conversation_id?: string; transcript?: Array<{ role?: string; message?: string | null; time_in_call_secs?: number }>;
-        metadata?: { call_duration_secs?: number }; analysis?: { transcript_summary?: string } };
+        metadata?: { call_duration_secs?: number; phone_call?: unknown }; analysis?: { transcript_summary?: string } };
     };
     if (p.type !== 'post_call_transcription') throw new UnsupportedEventError(p.type ?? 'missing');
     const agentId = p.data?.agent_id ?? '';
     const tenantId = await this.routes.tenantForAgent(agentId);
     if (!tenantId) throw new Error('unknown agent');
+    const callId = p.data?.conversation_id;
+    if (!callId) throw new Error('missing conversation id');
+    if (!(await this.seen.claim(callId, DEDUPE_TTL_SEC))) throw new DuplicateEventError(callId);
+    const callerE164 = callerE164FromPhoneCall(p.data?.metadata?.phone_call);
     return {
-      type: 'call.ended', engine: 'elevenlabs', tenantId: asTenantId(tenantId), callId: p.data?.conversation_id ?? '',
+      type: 'call.ended', engine: 'elevenlabs', tenantId: asTenantId(tenantId), callId,
       occurredAt: new Date((p.event_timestamp ?? this.nowSec()) * 1000).toISOString(),
       durationSec: p.data?.metadata?.call_duration_secs,
       transcript: (p.data?.transcript ?? []).map((t) => ({ role: t.role === 'agent' ? 'agent' as const : 'caller' as const, text: t.message ?? '', atSec: t.time_in_call_secs ?? 0 })),
       analysis: { summary: p.data?.analysis?.transcript_summary },
+      ...(callerE164 ? { callerE164 } : {}),
     };
+  }
+
+  /** Forget a delivered conversation: call this when handing the event on failed, before answering the webhook with an error. */
+  async releaseEvent(callId: string): Promise<void> {
+    await this.seen.release?.(callId);
   }
 }
