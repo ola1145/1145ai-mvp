@@ -12,9 +12,10 @@ and the numbers in `evidence`. tests/test_naturalness.py fails if a value has no
 TTS voice and stability are picked by ear with the owner: 3 library voices x AB_STABILITY on AB_CALL_SCRIPTS
 (ab_trials). That listening test needs real ElevenLabs synthesis, so it is not run from here.
 
-Wiring (worker.py, owned by E5): pass `turn_handling=turn_handling(MultilingualModel())` to AgentSession. Note that
-when `turn_handling=` is given, AgentSession silently ignores the legacy flat kwargs, including `turn_detection=`,
-so the detector has to go inside it. `session_kwargs()` keeps the legacy shape until that switch happens.
+Wiring (worker.py, owned by E5): `AgentSession(**session_kwargs(turn_detection=MultilingualModel()))`, or equivalently
+`turn_handling=turn_handling(MultilingualModel())`. Note that when `turn_handling=` is given, AgentSession silently
+ignores the legacy flat kwargs, including `turn_detection=`, so the detector has to go inside it and nothing flat may
+be passed beside it. (CR E5-2: the flat kwargs are deprecated in livekit-agents 1.8.)
 """
 from __future__ import annotations
 
@@ -113,21 +114,14 @@ def provisional_fields() -> list[str]:
     return [name for name, p in TUNING_PROVENANCE.items() if p.status == "provisional"]
 
 
-def session_kwargs(t: VoiceTuning = DEFAULT_TUNING) -> dict:
-    """Legacy flat kwargs for livekit.agents.AgentSession (accepted, with a deprecation warning, by the pinned 1.x).
+def session_kwargs(t: VoiceTuning = DEFAULT_TUNING, turn_detection: Any = None) -> dict:
+    """Keyword arguments for livekit.agents.AgentSession: just `turn_handling`, built by `turn_handling()`.
 
-    Prefer turn_handling(); see the module docstring for why the two must not be mixed.
+    livekit-agents 1.8 deprecates the flat arguments (min_endpointing_delay, allow_interruptions, turn_detection, ...;
+    removed in 2.0), so none are returned. `AgentSession(**session_kwargs(turn_detection=MultilingualModel()))` is
+    all the worker needs.
     """
-    return {
-        "allow_interruptions": t.allow_interruptions,
-        "min_interruption_duration": t.min_interruption_duration,
-        "min_interruption_words": t.min_interruption_words,
-        "false_interruption_timeout": t.false_interruption_timeout,
-        "resume_false_interruption": t.resume_false_interruption,
-        "min_endpointing_delay": t.min_endpointing_delay,
-        "max_endpointing_delay": t.max_endpointing_delay,
-        "preemptive_generation": t.preemptive_generation,
-    }
+    return {"turn_handling": turn_handling(turn_detection, t)}
 
 
 def turn_handling(turn_detection: Any = None, t: VoiceTuning = DEFAULT_TUNING) -> dict:
