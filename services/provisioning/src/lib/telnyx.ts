@@ -29,6 +29,12 @@ export interface TelnyxClient {
   order(e164: string, connectionId: string, customerReference: string): Promise<{ orderId: string; status: string }>;
   /** Existing, non-failed order carrying this customer_reference (our idempotency key at the vendor). */
   findOrderByReference(customerReference: string): Promise<TelnyxOrder | undefined>;
+  /**
+   * The number's record on OUR account, if we own it (`GET /phone_numbers`, which lists only numbers on the account).
+   * SEC-18: after an order whose outcome is unknown this is how a retry learns whether the number was bought, without
+   * ordering again. A failure to ask is thrown as TelnyxTransientError, never answered as "not owned".
+   */
+  findOwnedNumber(e164: string): Promise<{ id: string } | undefined>;
   /** Point an owned number at the FQDN connection that fronts LiveKit SIP. Safe to repeat. */
   assignToConnection(e164: string, connectionId: string): Promise<void>;
 }
@@ -55,6 +61,13 @@ export function telnyxClient(apiKey: string, fetchImpl: typeof fetch = fetch): T
       throw new TelnyxRejectedError(msg, r.status);
     }
     try { return await r.json(); } catch { throw new TelnyxTransientError(`telnyx ${method} ${path.split('?')[0]} unreadable body`, r.status); }
+  }
+
+  /** The account's record for exactly this number. The filter is asked for an exact match and checked again here. */
+  async function ownedRecord(e164: string): Promise<{ id?: string; connection_id?: string } | undefined> {
+    const q = new URLSearchParams({ 'filter[phone_number]': e164 });
+    const found = (await call('GET', `/phone_numbers?${q}`)) as { data?: Array<{ id?: string; phone_number?: string; connection_id?: string }> };
+    return (found.data ?? []).find((d) => d.phone_number === undefined || d.phone_number === e164);
   }
 
   return {
@@ -88,10 +101,13 @@ export function telnyxClient(apiKey: string, fetchImpl: typeof fetch = fetch): T
       };
     },
 
+    async findOwnedNumber(e164) {
+      const mine = await ownedRecord(e164);
+      return mine?.id ? { id: mine.id } : undefined;
+    },
+
     async assignToConnection(e164, connectionId) {
-      const q = new URLSearchParams({ 'filter[phone_number]': e164 });
-      const found = (await call('GET', `/phone_numbers?${q}`)) as { data?: Array<{ id?: string; connection_id?: string }> };
-      const mine = found.data?.[0];
+      const mine = await ownedRecord(e164);
       if (!mine?.id) throw new TelnyxTransientError(`number ${e164} not on the account yet`); // order still settling: retry
       if (mine.connection_id === connectionId) return;
       await call('PATCH', `/phone_numbers/${encodeURIComponent(mine.id)}`, { connection_id: connectionId });
@@ -99,14 +115,16 @@ export function telnyxClient(apiKey: string, fetchImpl: typeof fetch = fetch): T
   };
 }
 
-/** Telnyx credentials live in one Secrets Manager JSON secret: { TELNYX_API_KEY, TELNYX_CONNECTION_ID }. */
+/** Telnyx credentials come from one Secrets Manager JSON secret with the keys TELNYX_API_KEY and TELNYX_CONNECTION_ID. */
 export interface TelnyxConfig { apiKey: string; connectionId: string }
 
 let cached: Promise<TelnyxConfig> | undefined;
 export function loadTelnyxConfig(env: NodeJS.ProcessEnv = process.env): Promise<TelnyxConfig> {
   cached ??= (async () => {
-    const arn = env.TELNYX_SECRET_ARN;
-    if (!arn) throw new Error('TELNYX_SECRET_ARN is not set');
+    // The stack points this at the stage's runtime secret (1145/<stage>/runtime, written by scripts/secrets/push.sh), whose JSON
+    // already carries TELNYX_API_KEY and TELNYX_CONNECTION_ID. Secrets Manager takes the name or the ARN.
+    const arn = env.TELNYX_SECRET_ID ?? env.TELNYX_SECRET_ARN;
+    if (!arn) throw new Error('TELNYX_SECRET_ID is not set');
     const out = await new SecretsManagerClient({}).send(new GetSecretValueCommand({ SecretId: arn }));
     const parsed = JSON.parse(out.SecretString ?? '{}') as Record<string, string | undefined>;
     if (!parsed.TELNYX_API_KEY || !parsed.TELNYX_CONNECTION_ID) throw new Error('Telnyx secret is missing TELNYX_API_KEY or TELNYX_CONNECTION_ID');
