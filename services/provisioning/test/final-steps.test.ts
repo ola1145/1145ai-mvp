@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { maskPhone, type EngineAgentRef, type EventEnvelope } from '@1145/shared';
 import { checkReply, naturalnessScore } from '../../../packages/conversation-style/src/index.js';
 import {
@@ -68,6 +68,8 @@ function fakeDoc(answers: Array<unknown> = []) {
 }
 const conditionFailed = () => Object.assign(new Error('conditional'), { name: 'ConditionalCheckFailedException' });
 
+// The steps log one JSON line per notable event; keep the test output readable. Tests that care spy on console themselves.
+beforeEach(() => { for (const m of ['log', 'info', 'warn', 'error'] as const) vi.spyOn(console, m).mockImplementation(() => undefined); });
 afterEach(() => { vi.restoreAllMocks(); });
 
 // ───────────────────────────────────────────────── emit-status ─────────────────────────────────────────────────
@@ -403,7 +405,7 @@ describe('smoke call success is call.ended > 10 s with no error', () => {
     expect(h.placed).toEqual([{ ref: { engine: 'livekit-telnyx', tenantId: TID, agentId: `frontdesk:${TID}` }, from: DID, to: OWNER_PHONE }]);
     expect(h.waits).toEqual([{ tenantId: TID, callId: 'call-1', timeoutMs: 60_000 }]);
     expect(h.sleeps).toEqual([]); // no pause before the first call
-    expect(h.ledger.load(TID, OB)).resolves.toMatchObject({ verdict: 'passed', attempts: 1 });
+    await expect(h.ledger.load(TID, OB)).resolves.toMatchObject({ verdict: 'passed', attempts: 1 });
     expect(h.triage.opened).toHaveLength(0);
     expect(h.status.messages()).toEqual([
       statusMessage({ step: 'smoke_call', state: 'started' }),
@@ -444,7 +446,7 @@ describe('smoke call success is call.ended > 10 s with no error', () => {
       tenantId: TID, onboardingId: OB, kind: 'smoke_call_failed', reason: 'not_reached', attempts: 2, lastCallId: 'call-2',
     })]);
     expect(JSON.stringify(h.triage.opened)).not.toContain(OWNER_PHONE.slice(2)); // support sees the case, not the owner's number
-    expect(h.ledger.load(TID, OB)).resolves.toMatchObject({ verdict: 'failed', reason: 'not_reached' });
+    await expect(h.ledger.load(TID, OB)).resolves.toMatchObject({ verdict: 'failed', reason: 'not_reached' });
   });
 
   it('every line the owner reads during a smoke call, pass or fail, is natural', async () => {
@@ -544,7 +546,7 @@ describe('smoke call success is call.ended > 10 s with no error', () => {
       { number: { binding: { ...BINDING, agentId: 'a b' } } },
       { number: { binding: { ...BINDING, agentId: '' } } },
       { number: { binding: { ...BINDING, number: '2145550142' } } },
-      { number: {} }, {},
+      { number: {} }, { number: undefined },
     ];
     for (const b of bad) {
       const h = smokeHarness();
