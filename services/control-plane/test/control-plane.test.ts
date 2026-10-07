@@ -3,7 +3,7 @@ import { createHash, createHmac } from 'node:crypto';
 import type { EngineAgentRef, EventEnvelope, TenantRuntimeState, VoiceEngine } from '@1145/shared';
 import { actionForStripeEvent, billingStatusFor, parseStripeEvent, planBilling, verifyStripeSignature, type BillingStatus } from '../src/stripe.js';
 import {
-  DdbBillingStore, handleStripeWebhook, stripeSecrets,
+  DdbBillingStore, createWebhookDeps, handleStripeWebhook, stripeSecrets,
   type BillingStore, type ClaimResult, type WebhookDeps, type WebhookRequest, type WebhookResponse,
 } from '../src/stripe-webhook.js';
 import { AuditEntryError, auditKey, auditWriter, type AuditEntry } from '../src/audit.js';
@@ -891,5 +891,26 @@ describe('stripe signing secret', () => {
       const get = stripeSecrets({ send: async () => ({ SecretString }) } as any, 'id', () => 0);
       await expect(get()).rejects.toThrow();
     }
+  });
+
+  it('accepts "new,old" during a rotation, so either endpoint secret verifies', async () => {
+    const get = stripeSecrets({ send: async () => ({ SecretString: JSON.stringify({ STRIPE_WEBHOOK_SECRET: ' whsec_new , whsec_old ' }) }) } as any, 'id', () => 0);
+    expect(await get()).toEqual(['whsec_new', 'whsec_old']);
+  });
+});
+
+describe('webhook wiring', () => {
+  const env = { TABLE_NAME: 't1145', TENANT_BUCKET: 'tenants', EVENT_BUS_NAME: 'bus', AUDIT_BUCKET: 'audit', RUNTIME_SECRET_ID: '1145/dev/runtime', AWS_REGION: 'us-east-1' };
+
+  it('accepts test-mode events only unless the stage is explicitly live', () => {
+    expect(createWebhookDeps(env).expectLivemode).toBe(false);
+    expect(createWebhookDeps({ ...env, STRIPE_LIVEMODE: 'false' }).expectLivemode).toBe(false);
+    expect(createWebhookDeps({ ...env, STRIPE_LIVEMODE: 'true' }).expectLivemode).toBe(true);
+    expect(() => createWebhookDeps({ ...env, STRIPE_LIVEMODE: 'yes' })).toThrow(/STRIPE_LIVEMODE/);
+  });
+
+  it.each(Object.keys(env).filter((k) => k !== 'AWS_REGION'))('refuses to start without %s', (name) => {
+    const { [name]: _gone, ...rest } = env as Record<string, string>;
+    expect(() => createWebhookDeps(rest)).toThrow(name);
   });
 });
