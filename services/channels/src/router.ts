@@ -9,11 +9,29 @@ export interface IdentityRoute {
   tenantState?: 'provisioning' | 'active' | 'suspended';
 }
 
-export type ReplyTarget = Pick<InboundMessage, 'channel' | 'channelUserId' | 'chatId'>;
+/**
+ * Where a reply goes. All of it comes from the verified inbound message. `channelMessageId` is what web chat echoes back as
+ * `inReplyTo` so the app can tie a reply to the message that caused it (CR C3-2).
+ */
+export type ReplyTarget = Pick<InboundMessage, 'channel' | 'channelUserId' | 'chatId' | 'channelMessageId'>;
+
+/** What the owner's plain YES / NO to a pending identity binding turned into. Mirrors `BindingAnswer` in services/provisioning (D4). */
+export type BindingAnswer =
+  | { handled: false }
+  | { handled: true; outcome: 'confirmed' | 'cancelled' | 'expired'; reply: string };
 
 export interface RouterDeps {
   lookupIdentity(channel: string, channelUserId: string): Promise<IdentityRoute | undefined>;
   startOnboarding(msg: InboundMessage): Promise<string>;              // creates ONBOARDING record + IDENTITY route; returns onboardingId
+  /**
+   * SEC-20: the owner's YES / NO to "someone just signed in as ... if that was you, reply YES" is answered in code, before
+   * any agent runs. The input comes from the identity route (onboardingId) and the verified message (channel, sender,
+   * text); `{ handled: false }` means "not an answer to a pending binding, carry on". Rejects when the binding cannot be
+   * read, and the router then retries the message instead of handing the YES to the model.
+   * Optional only so fakes that never reach a binding need not declare it; `createProdDeps` is typed to always provide it
+   * (`ProdRouterDeps`), so the deployed router cannot lose this step without a compile error.
+   */
+  answerPendingBinding?(input: { onboardingId: string; channel: string; channelUserId: string; text: string }): Promise<BindingAnswer>;
   invokeAgent(agent: 'onboarding' | 'admin', sessionId: string, payload: AgentPayload): Promise<string>;
   /** POST /v1/admin/changes/apply with an OWNER token. Deterministic: the LLM is not in this path. */
   applyChange(code: string, ownerToken: string): Promise<{ ok: boolean; message: string }>;
@@ -50,7 +68,9 @@ export const DEFAULT_HOLDING_AFTER_MS = 25_000;
 
 const CONFIRM_RE = /^\s*confirm\s+(\d{4})\s*$/i;
 
-const target = (msg: InboundMessage): ReplyTarget => ({ channel: msg.channel, channelUserId: msg.channelUserId, chatId: msg.chatId });
+const target = (msg: InboundMessage): ReplyTarget => ({
+  channel: msg.channel, channelUserId: msg.channelUserId, chatId: msg.chatId, channelMessageId: msg.channelMessageId,
+});
 
 function log(level: 'warn' | 'error', message: string, err?: unknown) {
   console.error(JSON.stringify({ level, message, err: err === undefined ? undefined : String(err) }));
@@ -123,6 +143,19 @@ async function handle(msg: InboundMessage, deps: RouterDeps, opts: RouteOptions)
   if (route?.tenantState === 'suspended') {
     await deps.send(target(msg), PAUSED_LINE);
     return { agent: 'admin', sessionId: 'suspended' };
+  }
+
+  // SEC-20: a plain YES / NO from the chat that asked for a sign-in link answers the pending identity binding. Deterministic and
+  // before any agent: the onboarding id is the route's (never the message's), and the model never sees that YES. If the binding
+  // cannot be read this throws, so the message is retried and a YES is never quietly handed to the model.
+  if (route?.role === 'onboarding' && route.onboardingId) {
+    const answer = await deps.answerPendingBinding?.({
+      onboardingId: route.onboardingId, channel: msg.channel, channelUserId: msg.channelUserId, text: msg.text,
+    });
+    if (answer?.handled) {
+      await deps.send(target(msg), answer.reply);
+      return { agent: 'none', sessionId: 'binding' };
+    }
   }
 
   // Unknown identity or still onboarding: one onboarding session per onboardingId, so Telegram <-> web chat continues the same thread.

@@ -15,7 +15,8 @@ export function createSender(deps: SenderDeps): RouterDeps['send'] {
   return async (to: ReplyTarget, text: string): Promise<void> => {
     switch (to.channel) {
       case 'webchat':
-        return deps.publishOwnerChat(to.channelUserId, text);
+        // The app clears its "typing" state on the first reply, whether that is a holding line or the real answer (CR C3-2).
+        return deps.publishOwnerChat(to.channelUserId, text, { inReplyTo: to.channelMessageId });
       case 'telegram':
         return deps.sendTelegram(to.chatId, text);
       case 'whatsapp':
