@@ -210,6 +210,7 @@ describe('limits: 10 pages, 5 s each, 2 MB total', () => {
   it('spends the ten pages on the useful ones first (prices, hours, contact), then the rest', async () => {
     const filler = Array.from({ length: 14 }, (_, i) => `/blog/post-${i}`);
     const web = new FakeWeb().robots(ORIGIN, 404).set(`${ORIGIN}/`, page('<p>Hi.</p>', [...filler, '/contact', '/pricing', '/hours']));
+    for (const l of [...filler, '/contact', '/pricing', '/hours']) web.set(`${ORIGIN}${l}`, page(`<p>Haircut $${l.length}</p>`));
     const { result } = await scrape(web);
     expect(result.pagesFetched).toBe(10);
     for (const p of ['/contact', '/pricing', '/hours']) expect(web.pages()).toContain(`${ORIGIN}${p}`);
