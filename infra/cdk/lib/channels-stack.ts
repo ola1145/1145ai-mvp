@@ -43,6 +43,10 @@ const REFERRAL_CLICKS = 'REFCLICK#*';
  */
 export class ChannelsStack extends Stack {
   readonly router: lambda.IFunction;
+  /** For ObservabilityStack (CR P7-3): the router's FIFO queue (oldest-message age), its DLQ (alarm) and the Hooks API (5xx). */
+  readonly inbound: sqs.Queue;
+  readonly inboundDlq: sqs.Queue;
+  readonly hooksApiId: string;
   constructor(scope: Construct, id: string, props: Props) {
     super(scope, id, props);
     const stage: string = this.node.tryGetContext('stage') ?? 'dev';
@@ -55,6 +59,8 @@ export class ChannelsStack extends Stack {
       fifo: true, contentBasedDeduplication: false, visibilityTimeout: Duration.seconds(180),
       deadLetterQueue: { queue: dlq, maxReceiveCount: 5 },
     });
+    this.inbound = inbound;
+    this.inboundDlq = dlq;
     const env = { QUEUE_URL: inbound.queueUrl, TABLE_NAME: props.data.table.tableName, EVENT_BUS_NAME: props.events.bus.eventBusName };
     const fn = (name: string, file: string, opts: { timeoutSec?: number; env?: Record<string, string> } = {}) =>
       nodeFn(this, name, `services/channels/src/${file}`, { timeoutSec: opts.timeoutSec ?? 5, env: { ...env, ...opts.env } });
@@ -91,6 +97,7 @@ export class ChannelsStack extends Stack {
         maxAge: Duration.hours(1),
       },
     });
+    this.hooksApiId = hooks.apiId;
     // SEC-25 (threat model F1, F3, F4, F10; CRs C3-1, C4-2, C5-1): stage-wide default for every route, which applies to routes added later too.
     (hooks.defaultStage?.node.defaultChild as apigw.CfnStage).defaultRouteSettings = {
       throttlingRateLimit: HOOKS_THROTTLE.rateLimit, throttlingBurstLimit: HOOKS_THROTTLE.burstLimit,

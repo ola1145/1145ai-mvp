@@ -18,6 +18,8 @@ export interface StoreConfig {
 
 /** Same pattern as POST /v1/owner-chat/messages and /r/{code} in contracts/openapi/channels.yaml. */
 const REFERRAL_CODE = /^[A-Za-z0-9_-]{4,64}$/;
+/** An IANA name such as America/Chicago, UTC or Etc/GMT+5. The route is written by activation, but it ends up in an agent payload, so it is checked. */
+const TIMEZONE = /^(?=.{1,64}$)[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+){0,2}$/;
 const LEASE_SECONDS = 150;           // a bit under the queue visibility timeout (180 s)
 const DEDUP_TTL_SECONDS = 2 * 24 * 3600;
 
@@ -65,6 +67,7 @@ export function createStore(cfg: StoreConfig): StoreDeps {
       tid: typeof item.tid === 'string' ? item.tid : undefined,
       onboardingId: typeof item.onboardingId === 'string' ? item.onboardingId : undefined,
       tenantState: state === 'provisioning' || state === 'active' || state === 'suspended' ? state : undefined,
+      timezone: typeof item.timezone === 'string' && TIMEZONE.test(item.timezone) ? item.timezone : undefined,
     };
   };
 

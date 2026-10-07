@@ -7,6 +7,8 @@ export interface IdentityRoute {
   tid?: string;              // set once the identity is bound to an ACTIVE tenant
   onboardingId?: string;     // set while onboarding
   tenantState?: 'provisioning' | 'active' | 'suspended';
+  /** The business's IANA timezone, when activation copied it onto the route (CR C1-3). Checked by the store before it gets here. */
+  timezone?: string;
 }
 
 /**
@@ -61,6 +63,12 @@ export interface AgentPayload {
   displayName?: string;
   onboardingId?: string;
   tenantToken?: string;      // admin agent: used by its tools, never placed in the prompt
+  timezone?: string;         // admin agent: the business clock, from the identity route (CR A3-1)
+  /**
+   * `<channel>:<channelMessageId>` of the message being answered (CR A1-2). The onboarding agent sends it as X-1145-Message-Id,
+   * so every facts decision records which owner message approved it (SEC-05). Left out when the API would refuse it.
+   */
+  messageId?: string;
 }
 
 export interface RouteOptions {
@@ -73,10 +81,18 @@ export type RouteResult = { agent: 'onboarding' | 'admin' | 'none'; sessionId: s
 export const DEFAULT_HOLDING_AFTER_MS = 25_000;
 
 const CONFIRM_RE = /^\s*confirm\s+(\d{4})\s*$/i;
+/** What the onboarding API accepts for X-1145-Message-Id (agents/onboarding/app.py). */
+const MESSAGE_ID_RE = /^[A-Za-z0-9_.:@-]{1,128}$/;
 
 const target = (msg: InboundMessage): ReplyTarget => ({
   channel: msg.channel, channelUserId: msg.channelUserId, chatId: msg.chatId, channelMessageId: msg.channelMessageId,
 });
+
+/** Channel-qualified, because one onboarding can carry on across Telegram and web chat, where ids could look alike. */
+function messageIdOf(msg: InboundMessage): Pick<AgentPayload, 'messageId'> {
+  const id = `${msg.channel}:${msg.channelMessageId}`;
+  return MESSAGE_ID_RE.test(id) ? { messageId: id } : {};
+}
 
 function log(level: 'warn' | 'error', message: string, err?: unknown) {
   console.error(JSON.stringify({ level, message, err: err === undefined ? undefined : String(err) }));
@@ -151,7 +167,11 @@ async function handle(msg: InboundMessage, deps: RouterDeps, opts: RouteOptions)
     }
     const token = mintTenantToken({ tid: route.tid, prn: 'admin-agent', ch: msg.channel, cid: msg.channelMessageId }, await deps.signingSecret(), 900);
     const sessionId = `admin-${route.tid}-${msg.channel}-${msg.channelUserId}`;
-    return converse(msg, deps, opts, 'admin', sessionId, { text: msg.text, channel: msg.channel, displayName: msg.displayName, tenantToken: token });
+    return converse(msg, deps, opts, 'admin', sessionId, {
+      text: msg.text, channel: msg.channel, displayName: msg.displayName, tenantToken: token,
+      ...(route.timezone ? { timezone: route.timezone } : {}),
+      ...messageIdOf(msg),
+    });
   }
 
   if (route?.tenantState === 'suspended') {
@@ -175,5 +195,7 @@ async function handle(msg: InboundMessage, deps: RouterDeps, opts: RouteOptions)
   // Unknown identity or still onboarding: one onboarding session per onboardingId, so Telegram <-> web chat continues the same thread.
   const onboardingId = route?.onboardingId ?? (await deps.startOnboarding(msg));
   const sessionId = `onb-${onboardingId}`;
-  return converse(msg, deps, opts, 'onboarding', sessionId, { text: msg.text, channel: msg.channel, displayName: msg.displayName, onboardingId });
+  return converse(msg, deps, opts, 'onboarding', sessionId, {
+    text: msg.text, channel: msg.channel, displayName: msg.displayName, onboardingId, ...messageIdOf(msg),
+  });
 }
