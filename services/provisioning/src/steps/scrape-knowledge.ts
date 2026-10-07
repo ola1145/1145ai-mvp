@@ -55,7 +55,7 @@ export interface FetchedPage { status: number; contentType: string; body: string
 /** `maxBytes` is how much the caller will accept; `signal` aborts at the page timeout. Never follow redirects. */
 export type PageFetcher = (url: string, opts: { signal: AbortSignal; maxBytes: number }) => Promise<FetchedPage>;
 
-/** FACT#<fid> item as written by this step. Additive attributes are documented in contracts/CHANGE_REQUESTS/D6-3.md. */
+/** FACT#<fid> item as written by this step. Attributes beyond the contract's four are listed in CHANGE_REQUESTS/D6-2.md. */
 export interface FactItem {
   PK: string;
   SK: string;
@@ -69,15 +69,20 @@ export interface FactItem {
   amountCents?: number;
   maxAmountCents?: number;
   onboardingId: string;
-  scrapedAt: string;
+  /** When this step wrote it (D3 sorts the owner's card by it). */
+  createdAt: string;
 }
 export interface FactStore {
   /** Writes only if the item does not exist. Resolves false when it already did. */
   putIfAbsent(item: FactItem): Promise<boolean>;
 }
 
-/** The workflow state. Only these four fields are read; everything else in it is ignored. */
-export interface ScrapeInput { onboardingId?: unknown; tenantId?: unknown; website?: unknown; listings?: unknown; [key: string]: unknown }
+/**
+ * The workflow state. Only `onboardingId`, `tenantId` and `basics.website` / `basics.listings` are read; everything else
+ * in it is ignored. D1 puts `basics: { businessName, businessType, website? }` in the execution input (listings are not
+ * collected yet, see CHANGE_REQUESTS/D6-1.md).
+ */
+export interface ScrapeInput { onboardingId?: unknown; tenantId?: unknown; basics?: unknown; [key: string]: unknown }
 export interface ScrapeDeps {
   fetchPage: PageFetcher;
   facts: FactStore;
@@ -414,9 +419,10 @@ export async function scrapeKnowledge(input: ScrapeInput, deps: ScrapeDeps): Pro
   const seen = new Set<string>();
   const seeds: QueueItem[] = [];
   let seq = 0;
-  const website = typeof input.website === 'string' ? input.website.trim() : '';
+  const basics = typeof input.basics === 'object' && input.basics !== null ? (input.basics as Record<string, unknown>) : {};
+  const website = typeof basics.website === 'string' ? basics.website.trim() : '';
   if (!website) skip('no-website');
-  const listings = Array.isArray(input.listings) ? input.listings.filter((x): x is string => typeof x === 'string' && x.trim() !== '').slice(0, limits.maxListings) : [];
+  const listings = Array.isArray(basics.listings) ? basics.listings.filter((x): x is string => typeof x === 'string' && x.trim() !== '').slice(0, limits.maxListings) : [];
   for (const [i, raw] of [website, ...listings].entries()) {
     if (!raw) continue;
     try {
@@ -490,7 +496,7 @@ export async function scrapeKnowledge(input: ScrapeInput, deps: ScrapeDeps): Pro
     await visit(item);
   }
 
-  const scrapedAt = (deps.now ?? (() => new Date()))().toISOString();
+  const createdAt = (deps.now ?? (() => new Date()))().toISOString();
   const candidates = mergeCandidates(found);
   const items: FactItem[] = candidates.map((c) => ({
     PK: keys.tenantPk(tenantId),
@@ -505,7 +511,7 @@ export async function scrapeKnowledge(input: ScrapeInput, deps: ScrapeDeps): Pro
     ...(c.amountCents !== undefined ? { amountCents: c.amountCents } : {}),
     ...(c.maxAmountCents !== undefined ? { maxAmountCents: c.maxAmountCents } : {}),
     onboardingId,
-    scrapedAt,
+    createdAt,
   }));
   let stored = 0;
   for (let i = 0; i < items.length; i += 8) {
@@ -540,7 +546,7 @@ export function ddbFactStore(client: { send(cmd: any): Promise<any> }, table: st
 
 /**
  * Step Functions entry. The whole workflow state arrives as the event: onboardingId and tenantId (set server-side when
- * provisioning starts), plus `website` and `listings` from the saved basics (contracts/CHANGE_REQUESTS/D6-1.md).
+ * provisioning starts), plus `basics.website` from the saved basics (D1). `basics.listings` is read too once something collects it (CHANGE_REQUESTS/D6-1.md).
  */
 export async function handler(event: ScrapeInput): Promise<ScrapeResult> {
   cleanOnboardingId(event.onboardingId);

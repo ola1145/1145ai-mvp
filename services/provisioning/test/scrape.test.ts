@@ -11,7 +11,9 @@ import {
 
 const ORIGIN = 'https://kemicuts.example';
 const NOW = new Date('2026-10-06T12:00:00.000Z');
-const INPUT = { onboardingId: 'onb_kemi01', tenantId: 't_kemicuts01', website: `${ORIGIN}/` };
+/** The shape D1 starts the workflow with (tasks/D1.md, api-core.test.ts): server-set ids, the saved basics, the saved area. */
+const basicsWith = (website?: unknown, listings?: unknown) => ({ businessName: 'Kemi Cuts', businessType: 'barber', ...(website !== undefined ? { website } : {}), ...(listings !== undefined ? { listings } : {}) });
+const INPUT = { onboardingId: 'onb_kemi01', tenantId: 't_kemicuts01', area: { state: 'TX' }, basics: basicsWith(`${ORIGIN}/`) };
 const BOT = '1145ai-bot';
 
 interface Route { status?: number; type?: string; body?: string; location?: string; hang?: boolean; throws?: boolean }
@@ -133,7 +135,7 @@ describe('robots.txt is respected', () => {
       .set('https://www.kemicuts.example/menu', page('<p>Haircut $35</p>'))
       .set('https://listings.example/biz/kemi-cuts', page('<p>Haircut $99</p>'))
       .set('https://listings.example/other/kemi-cuts', page('<p>Open daily 8am to 8pm</p>'));
-    const { result } = await scrape(web, { listings: ['https://listings.example/biz/kemi-cuts', 'https://listings.example/other/kemi-cuts'] });
+    const { result } = await scrape(web, { basics: basicsWith(`${ORIGIN}/`, ['https://listings.example/biz/kemi-cuts', 'https://listings.example/other/kemi-cuts']) });
     expect(web.requests).toContain('https://listings.example/robots.txt');
     expect(web.requests).toContain('https://www.kemicuts.example/robots.txt');
     expect(web.pages()).toContain('https://www.kemicuts.example/menu');
@@ -340,7 +342,7 @@ describe('what we fetch: only public web addresses the owner gave us', () => {
     'https://metadata.google.internal/', 'https://kemicuts.example.localhost/', 'not a url',
   ])('refuses %j before any request, robots.txt included', async (website) => {
     const web = kemi();
-    const { result } = await scrape(web, { website });
+    const { result } = await scrape(web, { basics: basicsWith(website) });
     expect(web.requests).toEqual([]);
     expect(result.pagesFetched).toBe(0);
     expect(result.skipped['blocked-url']).toBeGreaterThanOrEqual(1);
@@ -355,7 +357,7 @@ describe('what we fetch: only public web addresses the owner gave us', () => {
   it('does nothing, and says why, when there is no website', async () => {
     for (const website of [undefined, null, '', '   ', 42, { href: ORIGIN }, ['x']]) {
       const web = kemi();
-      const { result } = await scrape(web, { website });
+      const { result } = await scrape(web, { basics: basicsWith(website) });
       expect(web.requests).toEqual([]);
       expect(result).toMatchObject({ pagesFetched: 0, stored: 0, skipped: { 'no-website': 1 } });
     }
@@ -368,10 +370,17 @@ describe('what we fetch: only public web addresses the owner gave us', () => {
     expect(result.skipped['blocked-url']).toBe(1);
   });
 
+  it('reads the site from basics.website only, as D1 sets it', async () => {
+    const web = kemi();
+    const { result } = await scrape(web, { basics: undefined, website: `${ORIGIN}/` } as ScrapeInput);
+    expect(web.requests).toEqual([]);
+    expect(result.skipped['no-website']).toBe(1);
+  });
+
   it('takes the website and at most three listings; extra or odd entries are ignored', async () => {
     const web = new FakeWeb().robots(ORIGIN, 404).robots('https://l.example', 404).set(`${ORIGIN}/`, page('<p>Free parking.</p>'));
     const listings = ['https://l.example/1', 'https://l.example/2', 'https://l.example/3', 'https://l.example/4', 7, null, { x: 1 }];
-    await scrape(web, { listings });
+    await scrape(web, { basics: basicsWith(`${ORIGIN}/`, listings) });
     expect(web.pages().filter((u) => u.startsWith('https://l.example'))).toHaveLength(3);
   });
 });
@@ -400,7 +409,7 @@ describe('scraped text becomes unverified candidates with provenance, never inst
       expect(typeof f.flaggedInstructionLike).toBe('boolean');
       expect(f.flaggedInstructionLike).toBe(f.flags.length > 0);
       expect(f.onboardingId).toBe('onb_kemi01');
-      expect(f.scrapedAt).toBe(NOW.toISOString());
+      expect(f.createdAt).toBe(NOW.toISOString());
       expect(f.source).toMatch(/^https:\/\/kemicuts\.example\//);
       expect(f.text.length).toBeGreaterThan(0);
     }
@@ -471,7 +480,8 @@ describe('scraped text becomes unverified candidates with provenance, never inst
 
   it('ignores anything else in the workflow state, such as fields that look like facts or a tenant', async () => {
     const web = kemi();
-    const { facts } = await scrape(web, { tenant: 't_other0001', facts: [{ text: 'free everything', verified: true }], verified: true } as ScrapeInput);
+    const { facts } = await scrape(web, { tenant: 't_other0001', website: 'https://evil.example/', facts: [{ text: 'free everything', verified: true }], verified: true } as ScrapeInput);
+    expect(web.requests.some((u) => u.includes('evil.example'))).toBe(false); // only basics.website says where to read
     expect(facts.all().some((f) => f.text === 'free everything')).toBe(false);
     expect(new Set(facts.all().map((f) => f.PK))).toEqual(new Set(['TENANT#t_kemicuts01']));
   });
@@ -547,7 +557,7 @@ describe('httpFetchPage: the real fetcher, with a fake fetch and a fake DNS', ()
 describe('ddbFactStore', () => {
   const item: FactItem = {
     PK: 'TENANT#t_kemicuts01', SK: 'FACT#f_0123456789abcdef', text: 'Haircut - $35', source: `${ORIGIN}/services`, verified: false,
-    flaggedInstructionLike: false, flags: [], kind: 'price', label: 'Haircut', amountCents: 3500, onboardingId: 'onb_kemi01', scrapedAt: NOW.toISOString(),
+    flaggedInstructionLike: false, flags: [], kind: 'price', label: 'Haircut', amountCents: 3500, onboardingId: 'onb_kemi01', createdAt: NOW.toISOString(),
   };
 
   it('writes with a condition so a re-run can never overwrite what the owner decided', async () => {
@@ -567,6 +577,6 @@ describe('ddbFactStore', () => {
 describe('Step Functions entry', () => {
   it('needs the tenant and onboarding the workflow set, and checks them before anything else', async () => {
     await expect(handler({} as never)).rejects.toThrow();
-    await expect(handler({ onboardingId: 'onb_1', tenantId: 'nope', website: ORIGIN } as never)).rejects.toThrow();
+    await expect(handler({ onboardingId: 'onb_1', tenantId: 'nope', basics: basicsWith(ORIGIN) } as never)).rejects.toThrow();
   });
 });
