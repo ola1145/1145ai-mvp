@@ -45,7 +45,6 @@ const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isS
 const isUserId = (v: unknown): v is number => isCount(v) && v > 0;
 
 /** A profile name is owner free text: keep it short and on one line. It is data for the agent, never an instruction. */
-// eslint-disable-next-line no-control-regex
 const cleanName = (v: unknown): string | undefined => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, MAX_NAME) || undefined : undefined);
 
 function textOf(m: TelegramMessage): string {
@@ -91,7 +90,7 @@ export async function telegramWebhook(event: WebhookEvent, deps: TelegramDeps): 
   const text = textOf(m);
   const msg: InboundMessage = {
     channel: 'telegram', channelUserId: String(fromId), chatId: String(chatId), channelMessageId: String(u.update_id),
-    text, displayName: cleanName(m.from?.first_name), referralCode: parseTelegramStart(text),
+    text, displayName: cleanName(m.from?.first_name), referralCode: parseTelegramStart(typeof m.text === 'string' ? m.text : undefined),
     receivedAt: deps.now().toISOString(),
   };
   try {

@@ -397,6 +397,12 @@ describe('telegramWebhook', () => {
       expect(sink.map((m) => m.text)).toEqual(['our new menu', '[non-text message]']);
     });
 
+    it('only reads a referral code from message text, not from a photo caption', async () => {
+      const { sink, deps } = harnessWebhook();
+      await telegramWebhook(event({ update_id: 8, message: { ...privateUpdate(undefined).message, caption: '/start FRIEND1', photo: [{ file_id: 'x' }] } }), deps);
+      expect(sink[0]).toMatchObject({ text: '/start FRIEND1', referralCode: undefined });
+    });
+
     it('caps very long text at Telegram\'s own limit', async () => {
       const { sink, deps } = harnessWebhook();
       await telegramWebhook(event(privateUpdate('x'.repeat(10_000))), deps);
@@ -470,6 +476,21 @@ describe('createSqsEnqueue', () => {
       MessageDeduplicationId: 'telegram#15550001#900001',
     });
     expect(JSON.parse(String(sent[0]!.MessageBody))).toEqual(msg);
+  });
+});
+
+describe('handler (the Lambda entry point)', () => {
+  it('exists, and says exactly what is missing when the function is not configured', async () => {
+    const { handler } = await import('../src/telegram-webhook.js');
+    expect(typeof handler).toBe('function');
+    const saved = { id: process.env.RUNTIME_SECRET_ID, q: process.env.QUEUE_URL };
+    delete process.env.RUNTIME_SECRET_ID;
+    try {
+      await expect(handler(event(privateUpdate('hi')))).rejects.toThrow(/RUNTIME_SECRET_ID/);
+    } finally {
+      if (saved.id !== undefined) process.env.RUNTIME_SECRET_ID = saved.id;
+      if (saved.q !== undefined) process.env.QUEUE_URL = saved.q;
+    }
   });
 });
 
