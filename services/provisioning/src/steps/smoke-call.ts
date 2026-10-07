@@ -1,6 +1,8 @@
 import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { asTenantId, keys, type EngineAgentRef, type EngineId, type VoiceEngine } from '@1145/shared';
-import { assertOnboardingId, awsClients, emitStatus, requireEnv, statusDepsFromEnv, type DocClient, type StatusDeps, type StatusReason } from './emit-status.js';
+import { assertOnboardingId, awsClients, ddbTriage, emitStatus, requireEnv, statusDepsFromEnv, type DocClient, type StatusDeps, type StatusReason, type TriageCase, type TriageStore } from './emit-status.js';
+
+export { ddbTriage, type TriageCase, type TriageStore };
 
 /**
  * Step: smoke-call
@@ -77,21 +79,6 @@ export interface SmokeLedger {
   finish(tenantId: string, onboardingId: string, verdict: SmokeVerdict, now: Date): Promise<void>;
 }
 
-export interface TriageCase {
-  tenantId: string;
-  onboardingId: string;
-  kind: 'smoke_call_failed';
-  reason: SmokeFailReason;
-  attempts: number;
-  lastCallId?: string;
-  lastDurationSec?: number;
-  lastEndReason?: string;
-}
-export interface TriageStore {
-  /** Opens one case per onboarding. Resolves true when this call opened it, false when it was already open. */
-  open(c: TriageCase, now: Date): Promise<boolean>;
-}
-
 export interface SmokeCallDeps {
   /** The only way to place a call: through the engine interface, so it works on either engine (ADR-0001). */
   engineFor(engine: EngineId): Pick<VoiceEngine, 'placeSmokeTestCall'>;
@@ -138,10 +125,10 @@ export async function smokeCall(input: SmokeCallInput, deps: SmokeCallDeps): Pro
   const sleep = deps.sleep ?? defaultSleep;
   const voice = deps.engineFor(engine);
   const ref: EngineAgentRef = { engine, tenantId, agentId };
-  const status = (reason: StatusReason | undefined, state: 'started' | 'done' | 'failed') =>
-    emitStatus({ onboardingId, tenantId, step: 'smoke_call', state, ...(reason ? { reason } : {}) }, deps.status);
   /** Progress lines are nice to have: a hiccup sending one must never cost the owner the call itself. */
-  const tryStatus = (...a: Parameters<typeof status>) => status(...a).catch((err) => log('warn', 'status not sent', { onboardingId, err: scrub(err) }));
+  const tryStatus = (reason: StatusReason | undefined, state: 'started' | 'done') =>
+    emitStatus({ onboardingId, tenantId, step: 'smoke_call', state, ...(reason ? { reason } : {}) }, deps.status)
+      .catch((err) => log('warn', 'status not sent', { onboardingId, err: scrub(err) }));
 
   // A re-run (Step Functions retry, replayed execution) gets the earlier answer and does nothing else.
   const prior = await deps.ledger.load(tenantId, onboardingId);
@@ -153,7 +140,8 @@ export async function smokeCall(input: SmokeCallInput, deps: SmokeCallDeps): Pro
 
   /** Owner is told first, then the case is opened, then the verdict is recorded: a crash in between repeats the rest, never skips it. */
   async function fail(reason: SmokeFailReason): Promise<SmokeCallResult> {
-    await status(reason, 'failed');
+    // This step opens its own, more detailed case below, so the generic one that a failed status would open is left out.
+    await emitStatus({ onboardingId, tenantId, step: 'smoke_call', state: 'failed', reason }, { ...deps.status, triage: undefined });
     const opened = await deps.triage.open({
       tenantId, onboardingId, kind: 'smoke_call_failed', reason, attempts,
       ...(last.callId ? { lastCallId: last.callId } : {}),
@@ -250,31 +238,6 @@ export function ddbSmokeLedger(client: DocClient, table: string): SmokeLedger {
         TableName: table, Key: key(tenantId, onboardingId),
         UpdateExpression: `SET ${sets.join(', ')}`, ExpressionAttributeNames: names, ExpressionAttributeValues: values,
       }));
-    },
-  };
-}
-
-/** TENANT#<tid> / TRIAGE#<onboardingId>: one open case per onboarding for the support team (shape in CR D8-2). */
-export function ddbTriage(client: DocClient, table: string): TriageStore {
-  return {
-    async open(c, now) {
-      try {
-        await client.send(new PutCommand({
-          TableName: table,
-          Item: {
-            PK: keys.tenantPk(asTenantId(c.tenantId)), SK: `TRIAGE#${assertOnboardingId(c.onboardingId)}`,
-            kind: c.kind, status: 'open', reason: c.reason, attempts: c.attempts, openedAt: iso(now),
-            ...(c.lastCallId ? { lastCallId: c.lastCallId } : {}),
-            ...(c.lastDurationSec !== undefined ? { lastDurationSec: c.lastDurationSec } : {}),
-            ...(c.lastEndReason ? { lastEndReason: c.lastEndReason } : {}),
-          },
-          ConditionExpression: 'attribute_not_exists(PK)',
-        }));
-        return true;
-      } catch (err) {
-        if (isConditionFailure(err)) return false;
-        throw err;
-      }
     },
   };
 }

@@ -1,7 +1,7 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
-import { asTenantId, makeEvent, type EventEnvelope } from '@1145/shared';
+import { asTenantId, keys, makeEvent, type EventEnvelope } from '@1145/shared';
 
 /**
  * Step: emit-status
@@ -15,6 +15,10 @@ import { asTenantId, makeEvent, type EventEnvelope } from '@1145/shared';
  * @1145/conversation-style in CI (scripts/ci/check-style.ts reads every messageForOwner string in the catalog) and
  * cannot be steered by scraped or owner-typed text. The one value the owner chose, the agent's name, is vetted first.
  * The tenant comes from the workflow state the start endpoint set, never from model output (1145-tenant-isolation).
+ *
+ * Copy that promises a person ("our team will ...") is only sent together with a real follow-up: those catalog entries
+ * carry `triage: true`, and emitting one opens a support case at TENANT#<tid> / TRIAGE#<onboardingId>. A test keeps
+ * the two in step, so the words never promise more than the system does.
  */
 
 export const STATUS_STEPS = ['number', 'knowledge', 'profile', 'agent_name', 'smoke_call', 'activate'] as const;
@@ -24,13 +28,13 @@ export type StatusState = (typeof STATUS_STATES)[number];
 /** Picks a variant of the line for the same step and state. `no_name` is chosen automatically when there is no usable name. */
 export type StatusReason = 'retry' | 'no_name' | 'not_reached' | 'no_owner_phone' | 'owner_phone_not_allowed';
 
-interface CopyEntry { step: StatusStep; state: StatusState; reason?: StatusReason; messageForOwner: string }
+interface CopyEntry { step: StatusStep; state: StatusState; reason?: StatusReason; messageForOwner: string; triage?: true }
 
 /** Short, plain, first person, nothing scripted. See .claude/skills/1145-conversation-style. `{agentName}` is filled in below. */
 export const STATUS_COPY: readonly CopyEntry[] = [
   { step: 'number', state: 'started', messageForOwner: 'Finding you a local number now.' },
   { step: 'number', state: 'done', messageForOwner: 'Your new number is ready.' },
-  { step: 'number', state: 'failed', messageForOwner: "I couldn't get you a number just yet. Our team has the details and will be in touch." },
+  { step: 'number', state: 'failed', triage: true, messageForOwner: "I couldn't get you a number just yet. Our team has the details and will be in touch." },
 
   { step: 'knowledge', state: 'started', messageForOwner: 'Reading through your website for the details.' },
   { step: 'knowledge', state: 'waiting_owner', messageForOwner: "I found some details on your site. Have a look and tell me what's right." },
@@ -47,14 +51,14 @@ export const STATUS_COPY: readonly CopyEntry[] = [
   { step: 'smoke_call', state: 'started', messageForOwner: 'Calling your phone now. Pick up when it rings and say hi.' },
   { step: 'smoke_call', state: 'started', reason: 'retry', messageForOwner: "That one didn't connect. Trying again, so keep your phone close." },
   { step: 'smoke_call', state: 'done', messageForOwner: 'That worked, the test call came through fine.' },
-  { step: 'smoke_call', state: 'failed', reason: 'not_reached', messageForOwner: "I couldn't get through on the test call, so your line isn't live yet. Someone from our team will look into it and get in touch." },
-  { step: 'smoke_call', state: 'failed', reason: 'no_owner_phone', messageForOwner: "I don't have a phone number to test with, so your line isn't live yet. Someone from our team will reach out to finish up." },
-  { step: 'smoke_call', state: 'failed', reason: 'owner_phone_not_allowed', messageForOwner: "I can't place the test call to that number, so your line isn't live yet. Someone from our team will reach out to sort it out." },
+  { step: 'smoke_call', state: 'failed', reason: 'not_reached', triage: true, messageForOwner: "I couldn't get through on the test call, so your line isn't live yet. Someone from our team will look into it and get in touch." },
+  { step: 'smoke_call', state: 'failed', reason: 'no_owner_phone', triage: true, messageForOwner: "I don't have a phone number to test with, so your line isn't live yet. Someone from our team will reach out to finish up." },
+  { step: 'smoke_call', state: 'failed', reason: 'owner_phone_not_allowed', triage: true, messageForOwner: "I can't place the test call to that number, so your line isn't live yet. Someone from our team will reach out to sort it out." },
 
   { step: 'activate', state: 'started', messageForOwner: 'Switching your line on now.' },
   { step: 'activate', state: 'done', messageForOwner: "You're live! Calls to your new number now go to {agentName}." },
   { step: 'activate', state: 'done', reason: 'no_name', messageForOwner: "You're live! Your new number is answering calls now." },
-  { step: 'activate', state: 'failed', messageForOwner: 'Something got in the way of switching you on. Our team has been told and will sort it out.' },
+  { step: 'activate', state: 'failed', triage: true, messageForOwner: 'Something got in the way of switching you on. Our team has been told and will sort it out.' },
 ];
 
 export class UnknownStatusError extends Error {
@@ -73,7 +77,7 @@ export function vettedName(raw: unknown): string | undefined {
 }
 
 export interface StatusQuery { step: unknown; state: unknown; reason?: unknown; agentName?: unknown }
-interface ResolvedStatus { step: StatusStep; state: StatusState; messageForOwner: string }
+interface ResolvedStatus { step: StatusStep; state: StatusState; messageForOwner: string; triage: boolean }
 
 function resolve(q: StatusQuery): ResolvedStatus {
   const label = `${String(q.step)}/${String(q.state)}${q.reason ? `/${String(q.reason)}` : ''}`;
@@ -82,12 +86,13 @@ function resolve(q: StatusQuery): ResolvedStatus {
   const reason = q.reason === undefined || q.reason === '' ? undefined : q.reason;
   const exact = STATUS_COPY.find((c) => c.step === step && c.state === state && c.reason === reason);
   if (!exact) throw new UnknownStatusError(label);
-  if (!exact.messageForOwner.includes('{agentName}')) return { step, state, messageForOwner: exact.messageForOwner };
+  const triage = exact.triage === true;
+  if (!exact.messageForOwner.includes('{agentName}')) return { step, state, messageForOwner: exact.messageForOwner, triage };
   const name = vettedName(q.agentName);
-  if (name) return { step, state, messageForOwner: exact.messageForOwner.replace('{agentName}', name) };
+  if (name) return { step, state, messageForOwner: exact.messageForOwner.replace('{agentName}', name), triage };
   const plain = STATUS_COPY.find((c) => c.step === step && c.state === state && c.reason === 'no_name');
   if (!plain) throw new UnknownStatusError(`${label} (no name)`);
-  return { step, state, messageForOwner: plain.messageForOwner };
+  return { step, state, messageForOwner: plain.messageForOwner, triage: plain.triage === true };
 }
 
 /** The words for one step and state. Throws UnknownStatusError rather than sending a blank or invented line. */
@@ -103,9 +108,28 @@ export function assertOnboardingId(v: unknown): string {
 }
 
 export interface StatusRow { step: StatusStep; state: StatusState; messageForOwner: string; updatedAt: string; tenantId: string }
+/** One open case per onboarding for the support team. Holds ids and codes only: no phone numbers, no owner text. */
+export interface TriageCase {
+  tenantId: string;
+  onboardingId: string;
+  kind: 'smoke_call_failed' | 'step_failed';
+  reason: string;
+  step?: StatusStep;
+  attempts?: number;
+  lastCallId?: string;
+  lastDurationSec?: number;
+  lastEndReason?: string;
+}
+export interface TriageStore {
+  /** Opens the case. Resolves true when this call opened it, false when the onboarding already had one. */
+  open(c: TriageCase, now: Date): Promise<boolean>;
+}
+
 export interface StatusDeps {
   saveLatest(onboardingId: string, row: StatusRow): Promise<void>;
   publish(event: EventEnvelope): Promise<void>;
+  /** When present, a status whose copy promises a person's follow-up opens a case. */
+  triage?: TriageStore;
   now?: () => Date;
 }
 export interface EmitStatusInput { onboardingId: string; tenantId: string; step: string; state: string; reason?: string; agentName?: string }
@@ -117,11 +141,17 @@ export async function emitStatus(input: EmitStatusInput, deps: StatusDeps): Prom
   const status = resolve({ step: input.step, state: input.state, reason: input.reason, agentName: input.agentName });
   const now = (deps.now ?? (() => new Date()))();
 
-  await deps.saveLatest(onboardingId, { ...status, updatedAt: now.toISOString(), tenantId });
+  await deps.saveLatest(onboardingId, {
+    step: status.step, state: status.state, messageForOwner: status.messageForOwner, updatedAt: now.toISOString(), tenantId,
+  });
   await deps.publish(makeEvent('onboarding.status', { tenantId, correlationId: onboardingId }, {
     step: status.step, state: status.state, messageForOwner: status.messageForOwner,
   }, now));
-  return status;
+  if (status.triage && deps.triage) {
+    const opened = await deps.triage.open({ tenantId, onboardingId, kind: 'step_failed', reason: 'workflow_step_failed', step: status.step }, now);
+    if (opened) console.error(JSON.stringify({ level: 'error', msg: 'onboarding.needs_triage', onboardingId, tenantId, step: status.step })); // alarm-able
+  }
+  return { step: status.step, state: status.state, messageForOwner: status.messageForOwner };
 }
 
 // ── AWS wiring (the only part that is not a pure function of its deps) ─────────────────────────────────────────
@@ -152,6 +182,33 @@ export function eventBridgePublisher(client: DocClient, busName: string, source 
   };
 }
 
+/** TENANT#<tid> / TRIAGE#<onboardingId>: one open case per onboarding (first writer wins), for support and the ops console. */
+export function ddbTriage(client: DocClient, table: string): TriageStore {
+  return {
+    async open(c, now) {
+      try {
+        await client.send(new PutCommand({
+          TableName: table,
+          Item: {
+            PK: keys.tenantPk(asTenantId(c.tenantId)), SK: `TRIAGE#${assertOnboardingId(c.onboardingId)}`,
+            kind: c.kind, status: 'open', reason: c.reason, openedAt: now.toISOString(),
+            ...(c.step ? { step: c.step } : {}),
+            ...(c.attempts !== undefined ? { attempts: c.attempts } : {}),
+            ...(c.lastCallId ? { lastCallId: c.lastCallId } : {}),
+            ...(c.lastDurationSec !== undefined ? { lastDurationSec: c.lastDurationSec } : {}),
+            ...(c.lastEndReason ? { lastEndReason: c.lastEndReason } : {}),
+          },
+          ConditionExpression: 'attribute_not_exists(PK)',
+        }));
+        return true;
+      } catch (err) {
+        if ((err as { name?: string }).name === 'ConditionalCheckFailedException') return false;
+        throw err;
+      }
+    },
+  };
+}
+
 export function requireEnv(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`${name} is not set`);
@@ -168,12 +225,12 @@ export function awsClients(): { doc: DocClient; eb: DocClient } {
   return memo;
 }
 
-/** Status deps for the Lambda entries: DynamoDB latest-status item plus the 1145 bus. */
+/** Status deps for the Lambda entries: DynamoDB latest-status item, the 1145 bus and the triage case writer. */
 export function statusDepsFromEnv(): StatusDeps {
   const table = requireEnv('TABLE_NAME');
   const bus = requireEnv('EVENT_BUS_NAME');
   const { doc, eb } = awsClients();
-  return { saveLatest: ddbStatusStore(doc, table), publish: eventBridgePublisher(eb, bus) };
+  return { saveLatest: ddbStatusStore(doc, table), publish: eventBridgePublisher(eb, bus), triage: ddbTriage(doc, table) };
 }
 
 /**

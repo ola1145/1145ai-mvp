@@ -3,7 +3,7 @@ import { maskPhone, type EngineAgentRef, type EventEnvelope } from '@1145/shared
 import { checkReply, naturalnessScore } from '../../../packages/conversation-style/src/index.js';
 import {
   STATUS_COPY, STATUS_STATES, STATUS_STEPS, UnknownStatusError, ddbStatusStore, emitStatus, eventBridgePublisher,
-  handler as emitStatusHandler, statusMessage, type StatusDeps, type StatusRow,
+  handler as emitStatusHandler, statusMessage, type StatusDeps, type StatusRow, type TriageCase,
 } from '../src/steps/emit-status.js';
 import {
   awaitOwner, ddbTaskStore, handler as awaitOwnerHandler, sfnTaskCompleter, type AwaitOwnerDeps, type TaskRow,
@@ -11,7 +11,7 @@ import {
 import {
   MAX_SMOKE_ATTEMPTS, SMOKE_MIN_SECONDS, ddbCallOutcomes, ddbOwnerPhone, ddbSmokeLedger, ddbTriage, handler as smokeHandler,
   smokeCall, smokeCallPassed, smokeDestinationAllowed,
-  type CallOutcome, type SmokeCallDeps, type SmokeLedger, type SmokeRecord, type TriageCase, type TriageStore,
+  type CallOutcome, type SmokeCallDeps, type SmokeLedger, type SmokeRecord, type TriageStore,
 } from '../src/steps/smoke-call.js';
 import {
   IdentityRouteConflictError, NumberRouteMismatchError, OnboardingNotFoundError, ProfileNotActivatableError,
@@ -163,6 +163,37 @@ describe('emitStatus: onboarding.status for the chat and dashboard', () => {
     await expect(emitStatus({ onboardingId: OB, tenantId: TID, step: 'number', state: 'done' }, { ...s.deps, saveLatest: async () => { throw new Error('ddb down'); } })).rejects.toThrow('ddb down');
     expect(s.published).toHaveLength(0);
     await expect(emitStatus({ onboardingId: OB, tenantId: TID, step: 'number', state: 'done' }, { ...s.deps, publish: async () => { throw new Error('bus down'); } })).rejects.toThrow('bus down');
+  });
+
+  it('every line that promises a person will follow up opens a triage case, and no other line does', () => {
+    // The copy says "our team ..." only where something really tells the team.
+    for (const c of STATUS_COPY) {
+      expect(Boolean(c.triage), c.messageForOwner).toBe(/\bteam\b/i.test(c.messageForOwner));
+    }
+  });
+
+  it('a failed status that promises follow-up opens one triage case, nothing else does', async () => {
+    const s = statusFake();
+    const opened: TriageCase[] = [];
+    const deps: StatusDeps = { ...s.deps, triage: { open: async (c) => { opened.push(c); return true; } } };
+
+    await emitStatus({ onboardingId: OB, tenantId: TID, step: 'number', state: 'failed' }, deps);
+    expect(opened).toEqual([{ tenantId: TID, onboardingId: OB, kind: 'step_failed', reason: 'workflow_step_failed', step: 'number' }]);
+    expect(s.order).toEqual(['save', 'publish']); // the owner hears it either way
+
+    await emitStatus({ onboardingId: OB, tenantId: TID, step: 'knowledge', state: 'failed' }, deps); // we carry on without the website: not a case
+    await emitStatus({ onboardingId: OB, tenantId: TID, step: 'number', state: 'done' }, deps);
+    await emitStatus({ onboardingId: OB, tenantId: TID, step: 'activate', state: 'started' }, deps);
+    expect(opened).toHaveLength(1);
+
+    await emitStatus({ onboardingId: OB, tenantId: TID, step: 'activate', state: 'failed' }, deps);
+    expect(opened.map((c) => c.step)).toEqual(['number', 'activate']);
+  });
+
+  it('a triage case that cannot be opened fails the step, so the retry opens it', async () => {
+    const s = statusFake();
+    const deps: StatusDeps = { ...s.deps, triage: { open: async () => { throw new Error('ddb down'); } } };
+    await expect(emitStatus({ onboardingId: OB, tenantId: TID, step: 'activate', state: 'failed' }, deps)).rejects.toThrow('ddb down');
   });
 
   it('the latest-status item lives in the onboarding partition, one per step, and expires', async () => {
@@ -461,6 +492,15 @@ describe('smoke call success is call.ended > 10 s with no error', () => {
     for (const h of runs) { await smokeCall(smokeInput, h.deps); lines.push(...h.status.messages()); }
     expect(lines.length).toBeGreaterThan(8);
     for (const l of lines) expectNatural(l);
+  });
+
+  it('opens only its own detailed case, even when the status deps would also open a generic one', async () => {
+    const h = smokeHarness({ outcomes: [undefined, undefined] });
+    const generic: TriageCase[] = [];
+    h.deps.status = { ...h.status.deps, triage: { open: async (c) => { generic.push(c); return true; } } };
+    await smokeCall(smokeInput, h.deps);
+    expect(generic).toHaveLength(0);
+    expect(h.triage.opened).toEqual([expect.objectContaining({ kind: 'smoke_call_failed', attempts: 2, lastCallId: 'call-2' })]);
   });
 
   it('a Step Functions re-run after the failure places no new call and opens no second case', async () => {
