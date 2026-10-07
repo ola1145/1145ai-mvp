@@ -77,7 +77,7 @@ export const firstUsableCard = (cards: readonly CardOnFile[], now: Date): CardOn
 /** What the owner reads in chat. The `messageForOwner:` literals are also what CI's conversation-style check scans. */
 export const ownerCopy = {
   askForCard: (url: string) => ({
-    messageForOwner: `Before I pick your number, I need a card on file. It just keeps fake sign-ups out, and nothing gets charged. You can add it here: ${url}`,
+    messageForOwner: `Before I pick your number, I need a card on file. It's only there to keep fake sign-ups out, and adding it doesn't charge you. You can add it here: ${url}`,
   }),
   remindAboutCard: (url: string) => ({
     messageForOwner: `Whenever you're ready, I still need a card on file before I can get your number. Here's a fresh link: ${url}`,
@@ -311,12 +311,35 @@ export function makeHandler(deps: PaymentSetupDeps) {
   };
 }
 
+/**
+ * The onboarding service token, current first and previous second while a key rotates. A secret string is either a bare
+ * token or JSON `{ "current": "...", "previous"?: "..." }`. Anything unusable yields no tokens, so every call is refused.
+ */
+export function parseServiceTokens(secretString: string | undefined): string[] {
+  const raw = secretString?.trim();
+  if (!raw) return [];
+  if (!raw.startsWith('{')) return [raw];
+  try {
+    const o = JSON.parse(raw) as { current?: unknown; previous?: unknown };
+    return [o.current, o.previous].filter((t): t is string => typeof t === 'string' && t.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+/** From Secrets Manager when ONBOARDING_SERVICE_TOKEN_SECRET_ARN is set (preferred, SEC-22), else the plain env vars. */
+async function loadServiceTokens(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
+  const arn = env.ONBOARDING_SERVICE_TOKEN_SECRET_ARN;
+  if (arn) return parseServiceTokens((await new SecretsManagerClient({}).send(new GetSecretValueCommand({ SecretId: arn }))).SecretString);
+  return [env.ONBOARDING_SERVICE_TOKEN, env.ONBOARDING_SERVICE_TOKEN_PREVIOUS].filter((t): t is string => !!t);
+}
+
 let memo: Promise<ReturnType<typeof makeHandler>> | undefined;
 
 /** Lambda entry. Clients are built on first use so importing this file (the workflow step does) has no side effects. */
 export async function handler(event: unknown): Promise<ApiResult> {
-  memo ??= productionPayments().then(({ gateway, store, doc, table }) => makeHandler({
-    serviceTokens: () => [process.env.ONBOARDING_SERVICE_TOKEN, process.env.ONBOARDING_SERVICE_TOKEN_PREVIOUS].filter((t): t is string => !!t),
+  memo ??= Promise.all([productionPayments(), loadServiceTokens()]).then(([{ gateway, store, doc, table }, tokens]) => makeHandler({
+    serviceTokens: () => tokens,
     onboardingExists: async (id) => !!(await doc.send(new GetCommand({ TableName: table, Key: { PK: `ONBOARDING#${id}`, SK: 'STATE' }, ProjectionExpression: 'PK' }))).Item,
     gateway, store,
   }));

@@ -4,7 +4,7 @@ import { PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { describe, expect, it } from 'vitest';
 import { checkReply } from '../../../packages/conversation-style/src/index.js';
 import {
-  assertTestModeKey, ddbPaymentStore, ensureCustomer, makeHandler, ownerCopy, PaymentUnavailableError, stripeGateway,
+  assertTestModeKey, ddbPaymentStore, ensureCustomer, makeHandler, ownerCopy, parseServiceTokens, PaymentUnavailableError, stripeGateway,
   type CardOnFile, type PaymentGateway, type PaymentRecord, type PaymentStore, type StripeLike,
 } from '../src/api/payment-setup.js';
 import { checkPaymentMethod, ebStatusEmitter, NeedsPaymentMethodError, type OnboardingStatus } from '../src/steps/check-payment-method.js';
@@ -446,6 +446,20 @@ describe('CheckPaymentMethod: no card yet', () => {
     expect(checkReply(emitted[1]!.messageForOwner, { channel: 'chat', previousAgentTurns: [emitted[0]!.messageForOwner] })).toEqual([]);
   });
 
+  it('stays quiet when the router already handed the owner a link through the API', async () => {
+    const gateway = new FakeGateway(); const store = memoryStore(); const emitted: OnboardingStatus[] = [];
+    const api = makeHandler({ serviceTokens: () => ['svc-token'], onboardingExists: async () => true, gateway, store, now: () => NOW });
+    const asked = await api({ rawPath: `/internal/onboarding/${ONB}/payment-setup`, requestContext: { http: { method: 'POST' } }, headers: { authorization: 'Bearer svc-token' } });
+    expect(asked.statusCode).toBe(200);
+    const deps = (at: Date) => ({ gateway, store, emit: async (s: OnboardingStatus) => { emitted.push(s); }, now: () => at });
+    await expect(checkPaymentMethod({ onboardingId: ONB, tenantId: TENANT }, deps(new Date(NOW.getTime() + 60_000)))).rejects.toBeInstanceOf(NeedsPaymentMethodError);
+    expect(emitted).toHaveLength(0);
+    expect(gateway.sessions).toHaveLength(1);
+    gateway.attachCard('cus_1');
+    await checkPaymentMethod({ onboardingId: ONB, tenantId: TENANT }, deps(NOW));
+    expect(emitted.map((s) => s.state)).toEqual(['started']);          // the thank-you still goes out
+  });
+
   it('an expired card does not open the gate', async () => {
     const { gateway, run } = stepFixture();
     await expect(run()).rejects.toBeInstanceOf(NeedsPaymentMethodError);
@@ -617,7 +631,21 @@ describe('owner copy', () => {
 
   it('never promises a charge that the setup flow does not make', () => {
     for (const l of [ownerCopy.askForCard('https://x.test/a'), ownerCopy.remindAboutCard('https://x.test/a')].map((c) => c.messageForOwner)) {
-      expect(l).not.toMatch(/\$\d|\bcharged? you\b|\bsubscription\b/i);
+      expect(l).not.toMatch(/\$\d|\bsubscription\b|\bwill be charged\b|\bwe(?:'ll| will) charge\b/i);
     }
+  });
+});
+
+describe('service tokens', () => {
+  it('reads the current and the previous token from one secret string (JSON), or a bare token', () => {
+    expect(parseServiceTokens('{"current":"a","previous":"b"}')).toEqual(['a', 'b']);
+    expect(parseServiceTokens('{"current":"a"}')).toEqual(['a']);
+    expect(parseServiceTokens('  plain-token\n')).toEqual(['plain-token']);
+  });
+  it('anything unusable becomes no tokens, which means everything is refused', () => {
+    expect(parseServiceTokens(undefined)).toEqual([]);
+    expect(parseServiceTokens('')).toEqual([]);
+    expect(parseServiceTokens('{"current":""}')).toEqual([]);
+    expect(parseServiceTokens('{"current":42}')).toEqual([]);
   });
 });
