@@ -14,7 +14,7 @@
         "required_status_checks": [
           { "context": "typescript" }, { "context": "python" }, { "context": "cdk-synth" }, { "context": "ownership" },
           { "context": "contracts-guard" }, { "context": "conversation-style" }, { "context": "secrets-scan" },
-          { "context": "main-green" }, { "context": "claude-review" }
+          { "context": "main-green" }, { "context": "claude-review" }, { "context": "evals" }
         ] } }
   ],
   "bypass_actors": []

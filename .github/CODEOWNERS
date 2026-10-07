@@ -1,6 +1,13 @@
 # Contract and isolation changes need the owner's review; everything else merges on green checks.
+# Last matching pattern wins, so a broader directory must never come after a narrower entry with different owners.
 /contracts/                         @ola1145
 /packages/shared/                   @ola1145
 /infra/cdk/lib/data-stack.ts        @ola1145
 /infra/cdk/lib/github-oidc-stack.ts @ola1145
 /.github/                           @ola1145
+
+# What decides who may merge what (SEC-01). The ownership and contract checks read these from the base commit, and a PR
+# that edits them still needs the owner: the checkers, the issue to owned-paths map and the matcher.
+/scripts/ci/                        @ola1145
+/orchestration/issues.ts            @ola1145
+/orchestration/ownership.ts         @ola1145
