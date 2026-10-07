@@ -321,7 +321,10 @@ async function decideFacts(deps: OnboardingApiDeps, c: Ctx): Promise<ApiResult> 
     throw err;
   }
 
-  const workflow = await completeStep(deps, rec, 'facts', { ...summary });
+  // Read again after the write: if the workflow stored its token while we were saving, either this request or the
+  // await-owner step (which checks the saved decisions after storing the token) completes the step. Never neither.
+  const fresh = (await deps.store.getOnboarding(c.onboardingId)) ?? rec;
+  const workflow = await completeStep(deps, fresh, 'facts', { ...summary });
   log('info', 'facts decided', { onboardingId: c.onboardingId, ...summary, messageId: meta.messageId, workflow });
   return json(200, { approved: toApprove, rejected, heldBack, workflow });
 }

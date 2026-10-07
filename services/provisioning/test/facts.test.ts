@@ -25,6 +25,8 @@ class FakeStore implements OnboardingStore {
   calls: string[] = [];
   decisionBatches: Array<{ decisions: Array<{ id: string; decision: string }>; meta: DecisionMeta; summary: DecisionSummary }> = [];
   failApplyWith: Error | undefined;
+  /** Runs right after the decision/name write, to model the workflow storing its task token at that moment. */
+  afterWrite: (() => void) | undefined;
 
   constructor(opts: { tenantId?: string | null; tokens?: OnboardingRecord['taskTokens'] } = {}) {
     const rec: OnboardingRecord = { onboardingId: OID };
@@ -58,6 +60,7 @@ class FakeStore implements OnboardingStore {
       f.decidedMessageId = meta.messageId;
     }
     this.onboardings.get(id)!.factsDecision = { at: meta.at, ...summary };
+    this.afterWrite?.();
   }
   async saveAgentName(id: string, tenantId: string | undefined, name: string, at: string) {
     this.calls.push('saveAgentName');
@@ -66,6 +69,7 @@ class FakeStore implements OnboardingStore {
     const profile = tenantId ? this.profiles.get(tenantId) : undefined;
     if (profile) profile.agentName = name;
     void at;
+    this.afterWrite?.();
     return { profileUpdated: !!profile };
   }
   async markStepDone(id: string, step: 'facts' | 'agentName', token: string | undefined, at: string) {
@@ -274,6 +278,15 @@ describe('POST facts/decisions: the owner decides, the workflow moves on', () =>
     expect(w.workflow.calls).toHaveLength(0);
     expect(w.store.fact('f1')!.verified).toBe(true);
     expect(w.store.onboarding().factsDecision).toMatchObject({ approved: 1, rejected: 0, heldBack: 0 }); // await-owner reads this to finish at once
+  });
+
+  it('RACE: the workflow stores its task token just as the decisions are written; the step still completes', async () => {
+    const w = await shown(seeded({ tokens: {} }));              // not waiting when the request starts
+    w.store.afterWrite = () => { w.store.onboarding().taskTokens = { facts: 'tok-late-1' }; };
+    const res = await w.facts(decide({ approved: ['f1'], rejected: ['f3'] }));
+    expect(parse(res).workflow).toBe('completed');
+    expect(w.workflow.calls).toEqual([{ token: 'tok-late-1', output: { approved: 1, rejected: 1, heldBack: 0 } }]);
+    expect(w.store.onboarding().taskTokens?.facts).toBeUndefined();
   });
 
   it('SEC-05: an id that was not in the latest listing cannot be approved, and nothing is written', async () => {
@@ -537,6 +550,14 @@ describe('POST agent-name: the owner names the receptionist', () => {
     expect(second.statusCode).toBe(200);
     expect(w.store.onboarding().agentName).toBe('Maya');
     expect(w.store.profiles.get(TID)!.agentName).toBe('Maya');
+  });
+
+  it('RACE: the workflow stores its task token just as the name is saved; the step still completes', async () => {
+    const w = world({ tokens: {} });
+    w.store.afterWrite = () => { w.store.onboarding().taskTokens = { agentName: 'tok-late-2' }; };
+    const res = await w.agentName(nameIt('Ava'));
+    expect(parse(res).workflow).toBe('completed');
+    expect(w.workflow.calls).toEqual([{ token: 'tok-late-2', output: { agentName: 'Ava' } }]);
   });
 
   it('before provisioning has started the name is kept on the onboarding record only', async () => {

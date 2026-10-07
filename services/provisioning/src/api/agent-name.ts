@@ -53,7 +53,9 @@ async function nameAgent(deps: OnboardingApiDeps, event: ApiEvent, onboardingId:
   }
 
   const { profileUpdated } = await deps.store.saveAgentName(onboardingId, rec.tenantId, n.name, nowIso(deps));
-  const workflow = await completeStep(deps, rec, 'agentName', { agentName: n.name });
+  // Read again after the write so a task token stored in the meantime is not missed (see decideFacts in facts.ts).
+  const fresh = (await deps.store.getOnboarding(onboardingId)) ?? rec;
+  const workflow = await completeStep(deps, fresh, 'agentName', { agentName: n.name });
   return json(200, { name: n.name, profileUpdated, workflow });
 }
 
