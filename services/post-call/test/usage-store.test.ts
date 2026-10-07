@@ -172,7 +172,7 @@ function awsError(name: string, message: string, extra: Record<string, unknown> 
   return Object.assign(new Error(message), { name, ...extra });
 }
 
-interface Fault { match: (command: string, input: Record<string, unknown>) => boolean; error: Error; once: boolean }
+interface Fault { match: (command: string, input: Record<string, any>) => boolean; error: Error; once: boolean }
 
 class FakeDynamo {
   readonly items = new Map<string, Item>();
