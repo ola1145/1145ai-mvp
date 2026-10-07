@@ -148,7 +148,8 @@ function decodeEntities(s: string): string {
   });
 }
 
-const BLOCK_TAG = /<\/?(?:p|div|br|li|ul|ol|tr|table|thead|tbody|tfoot|h[1-6]|section|article|header|footer|nav|main|aside|blockquote|pre|hr|form|dl|dt|dd|figure|figcaption|address|option|select|fieldset|legend|details|summary|body|html)\b[^>]*>/gi;
+/** Tag bodies are bounded ({0,2000}) so a page of unclosed "<a <a <a" cannot make the scan quadratic. */
+const BLOCK_TAG = /<\/?(?:p|div|br|li|ul|ol|tr|table|thead|tbody|tfoot|h[1-6]|section|article|header|footer|nav|main|aside|blockquote|pre|hr|form|dl|dt|dd|figure|figcaption|address|option|select|fieldset|legend|details|summary|body|html)\b[^>]{0,2000}>/gi;
 
 /**
  * Visible text of an HTML page. Script, style and similar are dropped whole, including one left open because the page
@@ -160,9 +161,9 @@ export function htmlToText(html: string): string {
     .replace(/<!--[\s\S]*?(?:-->|$)/g, ' ')
     .replace(/<(script|style|noscript|template|iframe)\b[\s\S]*?(?:<\/\1\s*>|$)/gi, ' ')
     .replace(BLOCK_TAG, '\n')
-    .replace(/<\/?(?:td|th)\b[^>]*>/gi, ' ')
-    .replace(/<\/?[a-z][^>]*>/gi, '')
-    .replace(/<[a-z/!][^>]*$/i, '');
+    .replace(/<\/?(?:td|th)\b[^>]{0,2000}>/gi, ' ')
+    .replace(/<\/?[a-z][^>]{0,2000}>/gi, '')
+    .replace(/<[a-z/!][^>]{0,2000}$/i, '');
   return decodeEntities(s)
     .replace(/[ \t\f\v\r]+/g, ' ')
     .replace(/ ?\n ?/g, '\n')
@@ -229,7 +230,8 @@ const cap = (text: string, max: number): string => {
   return (space > max / 2 ? cut.slice(0, space) : cut).trim();
 };
 
-const dedupeKey = (text: string): string => text.toLowerCase().replace(/[^\p{L}\p{N}$]+/gu, ' ').trim();
+/** Same text, ignoring case and punctuation: used to keep one copy of a line repeated across a page or a site. */
+export const candidateKey = (text: string): string => text.toLowerCase().replace(/[^\p{L}\p{N}$]+/gu, ' ').trim();
 
 // -- prices -----------------------------------------------------------------------------------------------------------
 
@@ -337,7 +339,7 @@ export function toCandidates(html: string, source: string): KnowledgeCandidate[]
   const seen = new Set<string>();
   const count = { flagged: 0, price: 0, hours: 0, info: 0 };
   const keep = (c: KnowledgeCandidate) => {
-    const key = dedupeKey(c.text);
+    const key = candidateKey(c.text);
     const bucket = c.flags.length ? 'flagged' : c.kind;
     if (!key || seen.has(key) || count[bucket] >= CANDIDATE_CAPS[bucket]) return;
     seen.add(key); count[bucket]++; out.push(c);

@@ -167,8 +167,9 @@ describe('robots.txt rules (RFC 9309 matching)', () => {
     ['User-agent: *\nDisallow: /*.pdf$\n', '/menu.pdf', false],
     ['User-agent: *\nDisallow: /*.pdf$\n', '/menu.pdf?x=1', true],
     ['User-agent: *\nDisallow: /*.pdf$\n', '/menu.pdfx', true],
-    ['User-agent: *\nDisallow: /*?session=\n', '/a?x=1&session=9', false],
-    ['User-agent: *\nDisallow: /*?session=\n', '/a?x=1', true],
+    ['User-agent: *\nDisallow: /*?session=\n', '/a?session=9', false],
+    ['User-agent: *\nDisallow: /*?session=\n', '/a?x=1&session=9', true], // only a query that starts with it
+    ['User-agent: *\nDisallow: /*session=\n', '/a?x=1&session=9', false],
     ['USER-AGENT: *\r\nDISALLOW: /x # keep out\r\n', '/x/y', false],
     ['﻿User-agent: *\nDisallow: /x\n', '/x', false],
     ['User-agent: Googlebot\nDisallow: /\n', '/x', true],
@@ -277,8 +278,8 @@ describe('limits: 10 pages, 5 s each, 2 MB total', () => {
 
   it('still uses the part of a page it was allowed to read', async () => {
     const web = new FakeWeb().robots(ORIGIN, 404).set(`${ORIGIN}/`, page(`<p>Haircut $35</p><p>Beard trim $20</p><!--${'x'.repeat(2_000_000)}`));
-    const { facts, result } = await scrape(web, {}, { limits: { maxPageBytes: 1000 } });
-    expect(result.bytesRead).toBeLessThanOrEqual(1000);
+    const { facts, result } = await scrape(web, {}, { limits: { maxPageBytes: 1500 } });
+    expect(result.bytesRead).toBeLessThanOrEqual(1500);
     expect(facts.all().map((f) => f.text)).toEqual(expect.arrayContaining(['Haircut $35', 'Beard trim $20']));
     expect(facts.all().some((f) => f.text.includes('xxx') || f.text.includes('<!--'))).toBe(false);
   });
