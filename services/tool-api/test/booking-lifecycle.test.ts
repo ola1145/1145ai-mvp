@@ -712,6 +712,16 @@ describe('ddbLifecycleStore', () => {
     expect(await ddbLifecycleStore(recordingDoc(() => ({ Items: [] })).doc, 'tbl', 't_a1').getBooking('bk_1')).toBeUndefined();
   });
 
+  it('takes the newest item when the by-id index briefly lists both the old and the moved booking', async () => {
+    const base = { PK, GSI1PK: 'TENANT#t_a1#BID', GSI1SK: 'bk_1' };
+    const old = { ...base, SK: `BOOKING#${TUE_3PM}#bk_1`, ...stored() };
+    const moved = { ...base, SK: `BOOKING#${WED_10AM}#bk_1`, ...stored({ start: WED_10AM, end: '2026-10-07T15:30:00.000Z', rescheduledAt: '2026-10-02T15:05:00.000Z' }) };
+    for (const rows of [[old, moved], [moved, old]]) {
+      const got = await ddbLifecycleStore(recordingDoc(() => ({ Items: rows })).doc, 'tbl', 't_a1').getBooking('bk_1');
+      expect(got?.start).toBe(WED_10AM);
+    }
+  });
+
   it('stores verification records with a hashed call key and TTL, and counts misses atomically', async () => {
     const put = recordingDoc();
     const store = ddbLifecycleStore(put.doc, 'tbl', 't_a1');

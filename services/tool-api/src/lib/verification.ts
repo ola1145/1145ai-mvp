@@ -135,10 +135,10 @@ export interface IssueInput {
  */
 export async function issueVerification(store: VerificationStore, input: IssueInput): Promise<IssueResult> {
   const callKey = callKeyOf(input.callId);
-  const existing = live(await store.getVerification(callKey, input.bookingId), input.now);
+  // Independent reads, so the voice path pays for one round trip, not two.
+  const [record, booking] = await Promise.all([store.getVerification(callKey, input.bookingId), store.getBooking(input.bookingId)]);
+  const existing = live(record, input.now);
   if (existing && existing.attempts >= MAX_VERIFY_ATTEMPTS) return { ok: false, reason: 'locked' };
-
-  const booking = await store.getBooking(input.bookingId);
   if (!booking) return { ok: false, reason: 'mismatch' };
 
   const dayMatches = localParts(new Date(booking.start), input.timezone).ymd === input.bookedDay;
