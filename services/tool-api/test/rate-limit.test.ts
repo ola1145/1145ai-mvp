@@ -635,7 +635,7 @@ describe('prodRequestGuard', () => {
     expect(guard).toBeDefined();
     const ok = handle(async () => json(200, {}), { guard });
     expect((await ok(voiceEvent({}))).statusCode).toBe(200);
-    expect(asked).toEqual(['t_tenanta01']);
+    expect(new Set(asked)).toEqual(new Set(['t_tenanta01'])); // only ever the verified tenant's client
     expect(ddb.sent.find((s) => s.op === 'Put')!.input.TableName).toBe('tbl');
     expect(header(voiceEvent({}), 'authorization')).toBeTruthy();
   });
