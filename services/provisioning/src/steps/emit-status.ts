@@ -12,8 +12,8 @@ import { asTenantId, makeEvent, type EventEnvelope } from '@1145/shared';
  *   2. the `onboarding.status` envelope on the 1145 bus (source 1145.provisioning)
  *
  * Every line the owner reads comes from the catalog below, never from the caller, so it is written once, checked by
- * @1145/conversation-style in CI (scripts/ci/check-style.ts picks up each `messageForOwner:` literal) and cannot be
- * steered by scraped or owner-typed text. The one value the owner chose, the agent's name, is vetted before it is used.
+ * @1145/conversation-style in CI (scripts/ci/check-style.ts reads every messageForOwner string in the catalog) and
+ * cannot be steered by scraped or owner-typed text. The one value the owner chose, the agent's name, is vetted first.
  * The tenant comes from the workflow state the start endpoint set, never from model output (1145-tenant-isolation).
  */
 

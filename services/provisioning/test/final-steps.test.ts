@@ -656,14 +656,14 @@ function activateHarness(o: {
   flip?: Error; profile?: Error; publish?: Error; statusPublish?: Error;
 } = {}) {
   const log: string[] = [];
-  const calls: Record<string, unknown[]> = { profile: [], route: [] };
+  const calls: { profile: unknown[]; route: unknown[] } = { profile: [], route: [] };
   const status = statusFake();
   const published: EventEnvelope[] = [];
   const store: ActivateStore = {
     getOnboarding: async () => { log.push('read-onboarding'); return o.onboarding === null ? undefined : (o.onboarding ?? { channel: 'webchat', channelUserId: 'sub-123' }); },
     getNumberRoute: async () => { log.push('read-number-route'); return 'numberRoute' in o ? o.numberRoute : { tid: TID }; },
-    activateProfile: async (a) => { log.push('profile'); calls.profile!.push(a); if (o.profile) throw o.profile; },
-    flipIdentityRoute: async (a) => { log.push('route'); calls.route!.push(a); if (o.flip) throw o.flip; },
+    activateProfile: async (a) => { log.push('profile'); calls.profile.push(a); if (o.profile) throw o.profile; },
+    flipIdentityRoute: async (a) => { log.push('route'); calls.route.push(a); if (o.flip) throw o.flip; },
   };
   const deps: ActivateDeps = {
     store,
