@@ -34,6 +34,11 @@ def memory_name(agent: str, stage: str) -> str:
     return f"agent1145_{agent}_{_stage(stage).replace('-', '_')}"
 
 
+def runtime_secret_id(stage: str) -> str:
+    """The runtime secret scripts/secrets/push.sh writes. It holds ONBOARDING_SERVICE_TOKEN, the key the onboarding agent signs with."""
+    return f"1145/{_stage(stage)}/runtime"
+
+
 def ssm_names(stage: str) -> dict[str, dict[str, str]]:
     base = f"/1145/{_stage(stage)}/agentcore"
     return {a: {"arn": f"{base}/{a}-arn", "memory_id": f"{base}/{a}-memory-id"} for a in AGENTS}
@@ -48,7 +53,8 @@ def launch_commands(stage: str, memory_ids: dict[str, str], region: str, executi
         cmds.append(["agentcore", "configure", "--entrypoint", f"{a}/app.py", "--name", name,
                      "--execution-role", execution_role_arn, "--region", region, "--non-interactive"])
         env = [f"AGENTCORE_MEMORY_ID={memory_ids[a]}"]
-        env += ["ONBOARDING_API_URL=<url>", "ONBOARDING_SERVICE_TOKEN=<from Secrets Manager>"] if a == "onboarding" else ["TOOL_API_URL=<url>"]
+        # The onboarding runtime reads its signing key from Secrets Manager at run time (SEC-22): only the secret's NAME goes here.
+        env += ["ONBOARDING_API_URL=<url>", f"RUNTIME_SECRET_ID={runtime_secret_id(stage)}"] if a == "onboarding" else ["TOOL_API_URL=<url>"]
         cmds.append(["agentcore", "launch", "--agent", name] + [x for e in env for x in ("--env", e)])
     return cmds
 

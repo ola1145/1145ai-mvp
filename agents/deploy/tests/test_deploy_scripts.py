@@ -60,3 +60,23 @@ def test_launch_commands_are_deterministic_and_set_memory_env():
     flat = [" ".join(c) for c in cmds]
     assert any("onboarding/app.py" in c for c in flat) and any("admin/app.py" in c for c in flat)
     assert any("AGENTCORE_MEMORY_ID=mem-o" in c for c in flat) and any("AGENTCORE_MEMORY_ID=mem-a" in c for c in flat)
+
+
+def test_onboarding_runtime_is_launched_with_a_secret_id_never_the_token_value():
+    # SEC-22: the signing key is fetched from Secrets Manager at run time; nothing secret goes on a command line.
+    cmds = plan.launch_commands("dev", {"onboarding": "mem-o", "admin": "mem-a"}, region="us-east-1")
+    onboarding = next(" ".join(c) for c in cmds if c[:2] == ["agentcore", "launch"] and "onboarding" in " ".join(c))
+    assert "RUNTIME_SECRET_ID=1145/dev/runtime" in onboarding
+    assert "ONBOARDING_SERVICE_TOKEN" not in onboarding
+
+
+def test_admin_runtime_gets_no_onboarding_secret():
+    cmds = plan.launch_commands("dev", {"onboarding": "mem-o", "admin": "mem-a"}, region="us-east-1")
+    admin = next(" ".join(c) for c in cmds if c[:2] == ["agentcore", "launch"] and "admin" in " ".join(c))
+    assert "RUNTIME_SECRET_ID" not in admin and "TOOL_API_URL=" in admin
+
+
+def test_the_secret_id_follows_the_stage():
+    assert plan.runtime_secret_id("prod") == "1145/prod/runtime"
+    with pytest.raises(ValueError):
+        plan.runtime_secret_id("dev; rm -rf /")

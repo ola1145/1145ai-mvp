@@ -144,3 +144,48 @@ def test_oversized_text_is_truncated():
     t = onboarding_turn({"onboardingId": "O1", "text": "a" * 50_000})
     run_turn(t, make_agent=lambda sm: (lambda text: seen.append(text) or "ok"), memory_factory=FakeMemory())
     assert len(seen[0]) <= 4000
+
+
+# ---- the router pads short runtime session ids (CR A1-1 section 1) ------------------------------------------------------
+
+import hashlib
+
+
+def router_runtime_session_id(session_id: str) -> str:
+    """services/channels/src/lib/session.ts runtimeSessionId: under 33 characters gets a hash suffix, otherwise unchanged."""
+    clean = re.sub(r"[^A-Za-z0-9_-]", "-", session_id)
+    clean = re.sub(r"^[^A-Za-z0-9]+", "s", clean)
+    digest = hashlib.sha256(session_id.encode()).hexdigest()
+    if len(clean) > 256:
+        return f"{clean[:150]}-{digest}"
+    if len(clean) < 33:
+        return f"{clean or 's'}-{digest[:33]}"
+    return clean
+
+
+def test_onboarding_memory_key_ignores_the_routers_padding():
+    # `onb-` plus a 22 character id is 26 characters: the router pads it for AgentCore, the agent keys memory on the
+    # onboarding id so the key is the same on web chat and Telegram and never depends on how it was padded.
+    onboarding_id = "o_0123456789abcdef0123"
+    padded = router_runtime_session_id(onboarding_session_id(onboarding_id))
+    assert padded != onboarding_session_id(onboarding_id) and len(padded) >= 33
+    t = onboarding_turn({"onboardingId": onboarding_id, "text": "hi", "channel": "telegram"})
+    assert t.session_id == "onb-o_0123456789abcdef0123" and padded.startswith(t.session_id)
+
+
+def test_admin_memory_key_is_the_padded_runtime_session_id_and_stays_valid():
+    for tid, channel, user in [("t_0123456789abcdef0123", "telegram", "99"), ("t_0123456789abcdef0123", "webchat", "cog-sub-" + "x" * 40), ("t_0123456789abcdef0123", "telegram", "+1 (214) 555/0100")]:
+        runtime_id = router_runtime_session_id(admin_session_id(tid, channel, user))
+        t = admin_turn({"tenantToken": "tok", "text": "hi"}, Ctx(runtime_id))
+        assert t.session_id == t.actor_id == runtime_id
+        assert tid in t.session_id, "the tenant is part of the key, so two tenants never share a thread"
+        sid = memory_session_id(t.session_id)
+        assert SESSION_ID_RE.fullmatch(sid) and len(sid) <= 100
+        assert memory_session_id(t.session_id) == sid, "stable across turns"
+
+
+def test_very_long_runtime_ids_still_map_to_distinct_valid_memory_ids():
+    a = router_runtime_session_id(admin_session_id("t_a" + "0" * 19, "webchat", "u" * 300))
+    b = router_runtime_session_id(admin_session_id("t_b" + "0" * 19, "webchat", "u" * 300))
+    assert len(a) > 100 and memory_session_id(a) != memory_session_id(b)
+    assert SESSION_ID_RE.fullmatch(memory_session_id(a)) and SESSION_ID_RE.fullmatch(memory_session_id(b))
