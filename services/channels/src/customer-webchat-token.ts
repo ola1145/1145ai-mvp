@@ -197,6 +197,9 @@ async function mint(event: WebchatEvent, deps: WebchatTokenDeps): Promise<Webcha
   });
   const token = await visitor.toJwt();
 
+  // Enough to follow a chat from a tenant's complaint to its room. No token, no visitor address.
+  console.info(JSON.stringify({ level: 'info', message: 'webchat token issued', tid: widget.tid, room: roomName }));
+
   const agentName = cleanInline(widget.agentName, MAX_AGENT_NAME);
   const businessName = cleanInline(widget.businessName, MAX_BUSINESS_NAME);
   return reply(200, {
@@ -330,7 +333,12 @@ export function createLiveKitConfigProvider(cfg: { readSecret(): Promise<string>
   let cached: { value: LiveKitConfig; at: number } | undefined;
   return async () => {
     if (cached && now() - cached.at < SECRET_CACHE_MS) return cached.value;
-    const secret = JSON.parse(await cfg.readSecret()) as Record<string, unknown>;
+    let secret: Record<string, unknown>;
+    try { secret = JSON.parse(await cfg.readSecret()) as Record<string, unknown>; } catch (err) {
+      // A JSON.parse error quotes the text it choked on. Never let that reach a log line.
+      if (err instanceof SyntaxError) throw new Error('runtime secret is not valid JSON');
+      throw err;
+    }
     const missing = ['LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET'].filter((k) => typeof secret[k] !== 'string' || secret[k] === '');
     if (missing.length) throw new Error(`runtime secret is missing ${missing.join(', ')}`);
     const value = { url: secret.LIVEKIT_URL as string, apiKey: secret.LIVEKIT_API_KEY as string, apiSecret: secret.LIVEKIT_API_SECRET as string };

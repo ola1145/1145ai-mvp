@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { TokenVerifier, type ClaimGrants } from 'livekit-server-sdk';
 import { checkReply } from '../../../packages/conversation-style/src/index.js';
@@ -8,6 +8,12 @@ import {
   createWidgetLookup, handler,
   type RateLimiter, type WebchatEvent, type WebchatResult, type WebchatTokenDeps, type WidgetRecord,
 } from '../src/customer-webchat-token.js';
+
+// The handler logs one JSON line per issued token and per failure. Keep the test output quiet; the 'logs' test reads them.
+beforeEach(() => {
+  for (const level of ['info', 'warn', 'error'] as const) vi.spyOn(console, level).mockImplementation(() => {});
+});
+afterEach(() => { vi.restoreAllMocks(); });
 
 const KEY_A = 'wk_8fJ2kQ9xLm4TzR7a';
 const KEY_B = 'wk_Zq81mNpL0aVx3TbCd';
@@ -106,7 +112,7 @@ describe('POST /v1/webchat/token: widget key to LiveKit token', () => {
 
   it('answers 404 without any lookup when the key cannot be a widget key', async () => {
     const { deps, lookups } = setup();
-    for (const widgetKey of ['', 'wk_short', 'WK_8fJ2kQ9xLm4TzR7a', `wk_${'a'.repeat(41)}`, 'wk_8fJ2kQ9xLm4TzR7a#TENANT#t_x', '../../etc/passwd']) {
+    for (const widgetKey of ['', 'wk_short', 'WK_8fJ2kQ9xLm4TzR7a', `wk_${'a'.repeat(41)}`, 'wk_8fJ2kQ9xLm4TzR7a#TENANT#t_x', 'wk_8fJ2kQ9xLm4TzR7a\n', ' wk_8fJ2kQ9xLm4TzR7a', '../../etc/passwd']) {
       const r = await createWebchatToken(post({ widgetKey }), deps);
       expect(r.statusCode, widgetKey).toBe(404);
     }
@@ -213,6 +219,20 @@ describe('what the visitor token can do', () => {
   it('gives every visitor their own identity, never one derived from anything they sent', async () => {
     const { claims } = await mint();
     expect(claims.sub).toMatch(/^visitor-[0-9a-f-]{36}$/);
+  });
+});
+
+describe('logs', () => {
+  it('say which tenant and room a token was issued for, never the token, the secret or the visitor address', async () => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, 'info').mockImplementation((l: unknown) => { lines.push(String(l)); });
+    try {
+      const { deps } = setup();
+      const b = bodyOf(await createWebchatToken(post({ widgetKey: KEY_A }, '198.51.100.77'), deps));
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0]!)).toMatchObject({ message: 'webchat token issued', tid: 't_tenanta01', room: b.roomName });
+      for (const secret of [String(b.token), API_SECRET, API_KEY, '198.51.100.77']) expect(lines[0]).not.toContain(secret);
+    } finally { spy.mockRestore(); }
   });
 });
 
@@ -479,6 +499,13 @@ describe('LiveKit credentials', () => {
     ms += 10 * 60_000;
     await get();
     expect(reads).toBe(2);
+  });
+
+  it('never echo the secret text when it is not JSON', async () => {
+    const get = createLiveKitConfigProvider({ readSecret: async () => 'hunter2-not-json-api-secret', now: () => 0 });
+    const err = await get().catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toContain('hunter2');
   });
 
   it('fail loudly when a value is missing, naming the key but never a value', async () => {
