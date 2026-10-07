@@ -35,6 +35,7 @@ import {
   STRIPE_METER_EVENT_NAME,
   assertStripeTestKey,
   createDdbBillingStore,
+  createStripeUsageClient,
   makeReportStripeUsage,
   reportStripeUsage,
   stripeMeterClient,
@@ -172,6 +173,15 @@ function awsError(name: string, message: string, extra: Record<string, unknown> 
   return Object.assign(new Error(message), { name, ...extra });
 }
 
+/** DynamoDB rejects an expression that uses an undefined name or value, and a name or value that no expression uses. */
+function checkUsage(spec: Record<string, any>): void {
+  const exprs = [spec.ConditionExpression, spec.UpdateExpression, spec.ProjectionExpression, spec.KeyConditionExpression].filter(Boolean) as string[];
+  const used = new Set(exprs.flatMap((e) => tokenize(e)).filter((t) => t.startsWith('#') || t.startsWith(':')));
+  const given = new Set([...Object.keys(spec.ExpressionAttributeNames ?? {}), ...Object.keys(spec.ExpressionAttributeValues ?? {})]);
+  for (const g of given) if (!used.has(g)) throw awsError('ValidationException', `${g} is provided but not used in any expression`);
+  for (const u of used) if (!given.has(u)) throw awsError('ValidationException', `${u} is used but not provided`);
+}
+
 interface Fault { match: (command: string, input: Record<string, any>) => boolean; error: Error; once: boolean }
 
 class FakeDynamo {
@@ -210,6 +220,8 @@ class FakeDynamo {
       this.sent.push(name);
       const fi = this.faults.findIndex((f) => f.match(name, input));
       if (fi >= 0) { const f = this.faults[fi]!; if (f.once) this.faults.splice(fi, 1); throw f.error; }
+
+      if (!(cmd instanceof TransactWriteCommand)) checkUsage(input);
 
       if (cmd instanceof GetCommand) {
         guard(input.Key.PK);
@@ -263,6 +275,7 @@ class FakeDynamo {
         const specs = ops.map((op) => {
           const spec = (op.Put ?? op.Update ?? op.ConditionCheck) as Record<string, any> | undefined;
           if (!spec) throw new Error('unsupported transaction item');
+          checkUsage(spec);
           const keyOf = op.Put ? { PK: spec.Item.PK, SK: spec.Item.SK } : spec.Key;
           guard(keyOf.PK);
           if (op.Put && spec.Item.GSI1PK !== undefined) guard(spec.Item.GSI1PK);
@@ -390,6 +403,41 @@ describe('CRM upsert from a call', () => {
     const row = customersOf(db, A)[0]!;
     expect(row.name).toBeUndefined();
     expect(row.callCount).toBe(5);
+  });
+
+  it('an owner edit that lands between our read and our write is not overwritten: the write loses the race and re-plans', async () => {
+    const { db, store, call } = setup();
+    db.seed(ownerRecord({ name: '' }));
+    // First read is stale (name still blank); by the time we write, the owner has typed their own name.
+    let staleReads = 1;
+    const racing: CustomerStore = {
+      write: (...args) => store.write(...args),
+      findByPhone: async (tid, phone) => {
+        const fresh = await store.findByPhone(tid, phone);
+        if (staleReads-- > 0) {
+          db.seed(ownerRecord({ name: 'Kemi Adeyemi' })); // the owner's edit, landing after the read
+          return fresh;
+        }
+        return fresh;
+      },
+    };
+    const r = await upsertCustomerFromCall(call({ name: 'Kemi' }), { store: racing });
+    expect(r.status).toBe('updated');
+    expect(customersOf(db, A)[0]).toMatchObject({ name: 'Kemi Adeyemi', callCount: 5 });
+  });
+
+  it('retries a DynamoDB transaction conflict instead of failing the call', async () => {
+    const { db, deps, call } = setup();
+    db.failNext((cmd) => cmd === 'TransactWriteCommand', awsError('TransactionCanceledException', 'cancelled', { CancellationReasons: [{ Code: 'TransactionConflict' }, { Code: 'None' }] }));
+    const r = await upsertCustomerFromCall(call(), deps);
+    expect(r.status).toBe('created');
+    expect(customersOf(db, A)[0]!.callCount).toBe(1);
+  });
+
+  it('lets an unexpected DynamoDB failure through so the event is retried', async () => {
+    const { db, deps, call } = setup();
+    db.failNext((cmd) => cmd === 'TransactWriteCommand', awsError('ProvisionedThroughputExceededException', 'slow down'));
+    await expect(upsertCustomerFromCall(call(), deps)).rejects.toThrow(/slow down/);
   });
 
   it('is idempotent per call id: replaying the same call counts once', async () => {
@@ -540,6 +588,16 @@ describe('monthly usage counter', () => {
     await Promise.all(Array.from({ length: 25 }, (_, n) => record(`call-${n}`, 6 * (n + 1))));
     const expected = Array.from({ length: 25 }, (_, n) => 6 * (n + 1)).reduce((s, v) => s + v, 0);
     expect(db.read(`TENANT#${A}`, 'USAGE#2026-10')).toMatchObject({ billableSeconds: expected, callCount: 25 });
+  });
+
+  it('retries a DynamoDB transaction conflict on the counter and still counts the call once', async () => {
+    const { db, record } = setup({ capSec: 100_000, numbers: NUMBERS });
+    const conflict = awsError('TransactionCanceledException', 'cancelled', { CancellationReasons: [{ Code: 'TransactionConflict' }, { Code: 'None' }] });
+    db.failNext((cmd) => cmd === 'TransactWriteCommand', conflict);
+    db.failNext((cmd) => cmd === 'TransactWriteCommand', conflict);
+    const r = await record('call-1', 120);
+    expect(r).toMatchObject({ usedSec: 120, replayed: false });
+    expect(db.read(`TENANT#${A}`, 'USAGE#2026-10')).toMatchObject({ billableSeconds: 120, callCount: 1 });
   });
 
   it('files each call under the month it ended in (UTC), so a replay always lands in the same bucket', async () => {
@@ -830,6 +888,13 @@ describe('Stripe usage reporting', () => {
     expect(() => assertStripeTestKey('')).toThrow();
     expect(() => assertStripeTestKey('whsec_123')).toThrow();
     expect(() => assertStripeTestKey('sk_live_51Habc', { allowLive: true })).not.toThrow();
+  });
+
+  it('builds the production client from a test key without any network call, and refuses a live key', () => {
+    const client = createStripeUsageClient('sk_test_51Habc');
+    expect(typeof client.reportSeconds).toBe('function');
+    expect(() => createStripeUsageClient('sk_live_51Habc')).toThrow(/test mode/);
+    expect(() => createStripeUsageClient('sk_live_51Habc')).not.toThrow(/sk_live/);
   });
 
   it('the PostCallDeps-style adapter binds the call and uses the envelope tenant', async () => {
