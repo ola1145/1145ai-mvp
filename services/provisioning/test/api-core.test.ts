@@ -49,7 +49,7 @@ function memoryStore(seed: Record<string, Partial<OnboardingState>> = { [ID]: { 
     async markWaitlisted(id, entry) {
       writes.push(`waitlist:${id}`);
       const s = states.get(id); if (!s) throw new Error('no state');
-      s.waitlisted = true; s.status = 'waitlisted';
+      s.waitlisted = true; s.status = 'waitlisted'; s.waitlistReason ??= entry.reason;
       if (!waitlist.has(id)) waitlist.set(id, entry);
     },
     async ensureTenantId(id, candidate) {
@@ -62,7 +62,7 @@ function memoryStore(seed: Record<string, Partial<OnboardingState>> = { [ID]: { 
       s.provisioning = p; s.status = 'provisioning';
     },
   };
-  return { store, states, basics, waitlist, writes };
+  return { store, states, savedBasics: basics, waitlist, writes };
 }
 
 const arn = (name: string) => `arn:aws:states:us-east-1:111122223333:execution:Provisioning:${name}`;
@@ -306,7 +306,7 @@ describe('POST basics', () => {
     expect(r.status).toBe(200);
     expect(r.json).toMatchObject({ saved: true, areaResolved: true });
     expect(r.json.error).toBeUndefined(); // the agent's API wrapper treats any "error" key as a failure
-    expect(t.basics.get(ID)).toMatchObject({
+    expect(t.savedBasics.get(ID)).toMatchObject({
       businessName: 'Kemi Cuts', businessType: 'barber', areaText: 'Frisco, TX', area: { state: 'TX' }, website: 'https://kemicuts.com/',
     });
   });
@@ -316,38 +316,38 @@ describe('POST basics', () => {
     const r = await t.basics({ body: { ...GOOD_BASICS, area: 'Frisco' } });
     expect(r.status).toBe(200);
     expect(r.json).toMatchObject({ saved: true, areaResolved: false });
-    expect(t.basics.get(ID)?.areaText).toBe('Frisco');
-    expect(t.basics.get(ID)?.area).toEqual({});
+    expect(t.savedBasics.get(ID)?.areaText).toBe('Frisco');
+    expect(t.savedBasics.get(ID)?.area).toEqual({});
   });
 
   it('cleans owner text: control characters, runs of whitespace, and length', async () => {
     const t = setup();
     await t.basics({ body: { businessName: '  Kemi\u0000   Cuts \n‮ ', businessType: ' Barber   shop ', area: 'Frisco,\tTX', website: null } });
-    const b = t.basics.get(ID)!;
+    const b = t.savedBasics.get(ID)!;
     expect(b.businessName).toBe('Kemi Cuts');
     expect(b.businessType).toBe('Barber shop');
     expect(b.areaText).toBe('Frisco, TX');
     expect(b.website).toBeUndefined();
     await t.basics({ body: { businessName: 'N'.repeat(500), businessType: 't'.repeat(200), area: 'a'.repeat(300) } });
-    expect(t.basics.get(ID)!.businessName.length).toBe(120);
-    expect(t.basics.get(ID)!.businessType.length).toBe(60);
-    expect(t.basics.get(ID)!.areaText.length).toBe(100);
+    expect(t.savedBasics.get(ID)!.businessName.length).toBe(120);
+    expect(t.savedBasics.get(ID)!.businessType.length).toBe(60);
+    expect(t.savedBasics.get(ID)!.areaText.length).toBe(100);
   });
 
   it('drops a website that is not a public http(s) address instead of failing the save', async () => {
     const t = setup();
     const r = await t.basics({ body: { ...GOOD_BASICS, website: 'http://169.254.169.254/latest' } });
     expect(r.status).toBe(200);
-    expect(t.basics.get(ID)?.website).toBeUndefined();
+    expect(t.savedBasics.get(ID)?.website).toBeUndefined();
   });
 
   it('is idempotent and lets the owner correct themselves', async () => {
     const t = setup();
     await t.basics({ body: GOOD_BASICS });
     await t.basics({ body: GOOD_BASICS });
-    expect(t.basics.size).toBe(1);
+    expect(t.savedBasics.size).toBe(1);
     await t.basics({ body: { ...GOOD_BASICS, businessName: 'Kemi Cuts & Co', area: 'Plano, TX' } });
-    expect(t.basics.get(ID)).toMatchObject({ businessName: 'Kemi Cuts & Co', areaText: 'Plano, TX' });
+    expect(t.savedBasics.get(ID)).toMatchObject({ businessName: 'Kemi Cuts & Co', areaText: 'Plano, TX' });
   });
 
   it.each([
@@ -360,7 +360,7 @@ describe('POST basics', () => {
     expect(r.status).toBe(400);
     expect(r.json.code).toBe('invalid_basics');
     expect(typeof r.json.message).toBe('string');
-    expect(t.basics.size).toBe(0);
+    expect(t.savedBasics.size).toBe(0);
   });
 
   it('rejects bad JSON and non-object bodies', async () => {
@@ -622,7 +622,7 @@ describe('POST provisioning', () => {
 
 describe('sfnWorkflow', () => {
   const SM = 'arn:aws:states:us-east-1:111122223333:stateMachine:Provisioning';
-  const named = (name: string) => (err: Error) => Object.assign(err, { name });
+  const named = (name: string, message = name) => Object.assign(new Error(message), { name });
 
   function fakeClient(handlers: Record<string, (input: any) => any>) {
     const sent: Array<{ type: string; input: any }> = [];
@@ -645,19 +645,19 @@ describe('sfnWorkflow', () => {
   });
 
   it('ExecutionAlreadyExists means "return the existing one", not an error', async () => {
-    const c = fakeClient({ StartExecutionCommand: () => { throw named(new Error('exists'))('ExecutionAlreadyExists'); } });
+    const c = fakeClient({ StartExecutionCommand: () => { throw named('ExecutionAlreadyExists'); } });
     const r = await sfnWorkflow(c, SM).start(ID, {});
     expect(r).toEqual({ executionArn: arn(ID), existed: true });
   });
 
   it('other StartExecution errors surface', async () => {
-    const c = fakeClient({ StartExecutionCommand: () => { throw named(new Error('slow down'))('ThrottlingException'); } });
+    const c = fakeClient({ StartExecutionCommand: () => { throw named('ThrottlingException', 'slow down'); } });
     await expect(sfnWorkflow(c, SM).start(ID, {})).rejects.toThrow('slow down');
   });
 
   it('describe maps the execution, and a missing one is undefined', async () => {
     const c = fakeClient({ DescribeExecutionCommand: (i) => {
-      if (i.executionArn.endsWith(':gone')) throw named(new Error('none'))('ExecutionDoesNotExist');
+      if (i.executionArn.endsWith(':gone')) throw named('ExecutionDoesNotExist');
       return { executionArn: i.executionArn, status: 'SUCCEEDED', output: '{"a":1}', startDate: NOW };
     } });
     const wf = sfnWorkflow(c, SM);
