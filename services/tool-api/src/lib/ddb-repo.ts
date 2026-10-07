@@ -2,6 +2,10 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { AssumeRoleCommand, STSClient } from '@aws-sdk/client-sts';
 import { keys } from '@1145/shared';
+import { ddbLifecycleStore, type LifecycleStore } from './booking-lifecycle.js';
+import { ddbChangeStore, type ChangeStore } from './changes.js';
+import { ddbProfileWrites, type ProfileWriteStore } from './profile-writes.js';
+import { createDdbReports, type TenantReads } from './reports.js';
 import { IdempotentReplay, SlotTakenError, type BookingRecord, type Service, type TenantRepo } from './repo.js';
 import type { BusinessHours } from './slots.js';
 
@@ -54,7 +58,12 @@ export function createTenantDocProvider(opts: TenantDocProviderOptions): (tid: s
 }
 
 let sts: STSClient | undefined;
-const prodProvider = createTenantDocProvider({
+/**
+ * The ONE cached ABAC client provider of a warm container (ADR-0003): `ddbRepoFor`, the resolvers (CR T5-2) and the rate
+ * limiter (CR T6-1) all go through it, so a tenant costs one AssumeRole per ~14 minutes per container, not one per caller.
+ * Resolves to a DocumentClient whose IAM session carries `tenant_id`, so it can only reach `TENANT#<tid>` items.
+ */
+export const tenantDocFor: (tid: string) => Promise<DynamoDBDocumentClient> = createTenantDocProvider({
   assumeRole: async (tid) => {
     const roleArn = process.env.TENANT_DATA_ROLE_ARN;
     if (!roleArn) throw new Error('TENANT_DATA_ROLE_ARN is not set');
@@ -73,10 +82,22 @@ const prodProvider = createTenantDocProvider({
 /** The production repo: credentials come from AssumeRole with a tenant_id session tag, so IAM itself refuses
  *  any key outside TENANT#<tid>. */
 export async function ddbRepoFor(tid: string): Promise<DdbTenantRepo> {
-  return createDdbRepo(await prodProvider(tid), tid);
+  return createDdbRepo(await tenantDocFor(tid), tid);
 }
 
-export type DdbTenantRepo = TenantRepo & { getHandoffWindow(): Promise<BusinessHours | undefined> };
+/** What production always has. TenantRepo (T0) declares the stores optional so in-memory repos may leave them out; this
+ *  type does not, so the production repo cannot be built without them and no handler answers 501 against DynamoDB. */
+export type DdbTenantRepo = TenantRepo & {
+  getHandoffWindow(): Promise<BusinessHours | undefined>;
+  /** CR T1-1: reschedule and cancel with caller verification. */
+  lifecycle: LifecycleStore;
+  /** CR T2-1: propose and apply owner changes. */
+  changes: ChangeStore;
+  /** CR T3-1: owner reports, bookings list, conversations. */
+  reports: TenantReads;
+  /** CR T4-1: direct hours and service edits. */
+  profileWrites: ProfileWriteStore;
+};
 
 /** Repo over any DocumentClient. Production passes the ABAC-scoped client above; DynamoDB Local tests pass their own. */
 export function createDdbRepo(doc: DynamoDBDocumentClient, tid: string, table: string = TABLE): DdbTenantRepo {
@@ -85,6 +106,11 @@ export function createDdbRepo(doc: DynamoDBDocumentClient, tid: string, table: s
   const get = async (SK: string) => (await doc.send(new GetCommand({ TableName: table, Key: { PK: pk, SK } }))).Item;
 
   return {
+    // The stores below share this tenant-scoped client, so IAM LeadingKeys fences every read and write they make.
+    lifecycle: ddbLifecycleStore(doc, table, tid),
+    changes: ddbChangeStore(doc, table, tid),
+    reports: createDdbReports(doc, tid, table),
+    profileWrites: ddbProfileWrites(doc, table, tid),
     async getHours() { return (await get(keys.hoursSk())) as BusinessHours | undefined; },
     async getService(id) { const i = await get(keys.serviceSk(id)); return i as Service | undefined; },
     async defaultService() {

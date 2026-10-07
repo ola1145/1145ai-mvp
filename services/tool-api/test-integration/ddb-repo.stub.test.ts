@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { createDdbRepo, createTenantDocProvider, type TenantCredentials } from '../src/lib/ddb-repo.js';
+import { createDdbRepo, createTenantDocProvider, tenantDocFor, type TenantCredentials } from '../src/lib/ddb-repo.js';
+import { lifecycleOf } from '../src/lib/booking-lifecycle.js';
+import { changeStoreOf } from '../src/lib/changes.js';
+import { profileWritesOf } from '../src/lib/profile-writes.js';
+import { reportsOf } from '../src/lib/reports.js';
 import { IdempotentReplay, SlotTakenError, type BookingRecord } from '../src/lib/repo.js';
 
 // These are unit tests with a stubbed client (no DynamoDB). They cover credential caching and the mapping of
@@ -61,6 +65,59 @@ describe('createDdbRepo tenant scoping', () => {
     for (const bad of ['', 't#1', 't_*', 'a'.repeat(65), 'a b']) {
       expect(() => createDdbRepo(asDoc(() => ({})), bad, 'tbl')).toThrow(/tenant id/);
     }
+  });
+});
+
+describe('createDdbRepo wires the stores the handlers need (CR T1-1, T2-1, T3-1, T4-1)', () => {
+  const audit = {
+    changeId: 'chg_1', kind: 'hours' as const, summary: 'Open Mon to Fri 9am to 5pm.', principal: 'owner' as const, channel: 'dashboard' as const,
+    stepUp: false, at: '2026-10-02T15:00:00.000Z', correlationId: 'req-1',
+  };
+
+  it('gives the repo every store, so no handler answers 501 against production', () => {
+    const repo = createDdbRepo(asDoc(() => ({})), 't_zz9', 'tbl');
+    expect(lifecycleOf(repo)).toBe(repo.lifecycle);
+    expect(changeStoreOf(repo)).toBe(repo.changes);
+    expect(reportsOf(repo)).toBe(repo.reports);
+    expect(profileWritesOf(repo)).toBe(repo.profileWrites);
+  });
+
+  it('keeps every store inside the constructed tenant partition and table', async () => {
+    const seen: Array<{ pk: string; table: string }> = [];
+    const doc = asDoc((cmd) => {
+      const i = cmd.input as {
+        TableName?: string; Key?: { PK: string }; Item?: { PK: string }; ExpressionAttributeValues?: Record<string, unknown>;
+        TransactItems?: Array<{ Put?: { TableName: string; Item: { PK: string } }; Update?: { TableName: string; Key: { PK: string } } }>;
+      };
+      if (i.Key) seen.push({ pk: i.Key.PK, table: i.TableName! });
+      if (i.Item) seen.push({ pk: i.Item.PK, table: i.TableName! });
+      if (typeof i.ExpressionAttributeValues?.[':pk'] === 'string') seen.push({ pk: i.ExpressionAttributeValues[':pk'] as string, table: i.TableName! });
+      for (const t of i.TransactItems ?? []) {
+        if (t.Put) seen.push({ pk: t.Put.Item.PK, table: t.Put.TableName });
+        if (t.Update) seen.push({ pk: t.Update.Key.PK, table: t.Update.TableName });
+      }
+      return { Items: [] };
+    });
+    const repo = createDdbRepo(doc, 't_zz9', 'tbl');
+    await repo.lifecycle.getBooking('bk_1');
+    await repo.lifecycle.getVerification('0123456789abcdef0123456789abcdef', 'bk_1');
+    await repo.changes.getByCode('1234');
+    await repo.reports.timezone();
+    await repo.reports.listConversations({ limit: 5 });
+    await repo.profileWrites.putHours({ timezone: 'America/Chicago', weekly: [{ day: 1, open: '09:00', close: '17:00' }] }, audit);
+    await repo.profileWrites.patchService('cut', { name: 'Haircut' }, audit);
+    expect(seen.length).toBeGreaterThan(8);
+    expect(new Set(seen.map((s) => s.pk))).toEqual(new Set(['TENANT#t_zz9']));
+    expect(new Set(seen.map((s) => s.table))).toEqual(new Set(['tbl']));
+  });
+});
+
+describe('tenantDocFor (CR T5-2 item 3, T6-1 item 3)', () => {
+  it('is the one cached provider the repo uses, exported so the resolver and the limiter share its credentials', async () => {
+    expect(typeof tenantDocFor).toBe('function');
+    // Same guard as every provider: a bad tenant id never reaches STS.
+    await expect(tenantDocFor('t_*')).rejects.toThrow(/tenant id/);
+    await expect(tenantDocFor('t#1')).rejects.toThrow(/tenant id/);
   });
 });
 
