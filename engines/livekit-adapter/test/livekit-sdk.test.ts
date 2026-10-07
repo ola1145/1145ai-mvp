@@ -61,7 +61,7 @@ describe('the real livekit-server-sdk fits the adapter ports', () => {
 
     const { callId } = await engine.placeSmokeTestCall({ engine: 'livekit-telnyx', tenantId: TENANT, agentId: `frontdesk:${TENANT}` }, NUMBER, OWNER_PHONE);
 
-    expect(callId).toBe('SCL_real_01');
+    expect(callId).toBe(ROOM);   // D8-3: not LiveKit's sipCallId ('SCL_real_01'); the worker uses the room name for smoke rooms
     expect(wire.map((w) => w.path)).toEqual(['/twirp/livekit.AgentDispatchService/CreateDispatch', '/twirp/livekit.SIP/CreateSIPParticipant']);
     expect(wire[0]!.body).toMatchObject({ room: ROOM, agentName: 'frontdesk' });
     expect(wire[0]!.body).not.toHaveProperty('metadata');

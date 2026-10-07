@@ -183,7 +183,7 @@ describe('LiveKitTelnyxEngine implements VoiceEngine', () => {
     it('dials the owner from the tenant number in a smoke room, and returns the call id events will carry', async () => {
       const t = engine();
       const { callId } = await t.engine.placeSmokeTestCall(REF, NUMBER, OWNER_PHONE);
-      expect(callId).toBe('SCL_call_01');
+      expect(callId).toBe(`smoke-${TENANT}-1800000000000-ab12cd34`);   // the room name: what the worker uses as call id (D8-3)
       expect(t.dispatch.created[0]!.room).toBe(`smoke-${TENANT}-1800000000000-ab12cd34`);
       expect(t.sip.calls[0]).toMatchObject({ to: OWNER_PHONE, room: `smoke-${TENANT}-1800000000000-ab12cd34` });
       expect(t.sip.calls[0]!.opts).toMatchObject({ fromNumber: NUMBER });

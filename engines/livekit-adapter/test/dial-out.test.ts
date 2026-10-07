@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createLiveKitAdapterDeps, DialOutError, type LiveKitAdapterConfig } from '../src/index.js';
+import { createLiveKitAdapterDeps, DialOutError, SMOKE_ROOM_PREFIX, type LiveKitAdapterConfig } from '../src/index.js';
 import {
   CONNECTION_ID, NUMBER, NUMBER_2, OTHER, OWNER_PHONE, SECRET, TENANT, TRUNK_ID,
   fakeDispatch, fakePorts, fakeRoutes, fakeSip, fakeStores, fakeTelnyx, type Log,
@@ -34,7 +34,7 @@ describe('dialOut: SipClient.createSipParticipant + AgentDispatch', () => {
     expect(t.sip.calls).toHaveLength(1);
     expect(t.sip.calls[0]).toMatchObject({ trunkId: TRUNK_ID, to: OWNER_PHONE, room: ROOM });
     expect(t.sip.calls[0]!.opts).toMatchObject({ fromNumber: NUMBER, waitUntilAnswered: true });
-    expect(callId).toBe('SCL_call_01');
+    expect(callId).toBe(ROOM);
   });
 
   it('uses the configured agent name, and bounds ringing and call length so a smoke call cannot run on', async () => {
@@ -50,9 +50,21 @@ describe('dialOut: SipClient.createSipParticipant + AgentDispatch', () => {
     expect(t.sip.calls[0]!.opts).toMatchObject({ ringingTimeout: 30, maxCallDuration: 120 });
   });
 
-  it('returns the room name when LiveKit gives no SIP call id, which is the id the worker falls back to', async () => {
-    const t = build({ reply: { sipCallId: '' } });
-    expect(await t.deps.dialOut(params)).toBe(ROOM);
+  // D8-3: smoke-call looks the result up by the id dialOut returns, so it must be the id call.ended carries. For a
+  // `smoke-` room the worker (frontdesk/sip.py `call_id_for`) uses the room name, which both sides know before the
+  // call connects. LiveKit's SIP call id is not used: nothing here confirms it equals the `sip.callID` attribute.
+  it('returns the room name, which is the call id the worker puts on call.ended for a smoke room', async () => {
+    for (const reply of [{ sipCallId: 'SCL_call_01' }, { sipCallId: '' }]) {
+      const t = build({ reply });
+      expect(await t.deps.dialOut(params)).toBe(ROOM);
+    }
+  });
+
+  it('only dials into smoke- rooms, the ones whose call id the worker takes from the room name', async () => {
+    expect(SMOKE_ROOM_PREFIX).toBe('smoke-');
+    const t = build();
+    await expect(t.deps.dialOut({ ...params, roomName: 'onboarding-room-1' })).rejects.toMatchObject({ reason: 'invalid_input' });
+    expect(t.log).toEqual([]);
   });
 
   it('never puts the tenant id in the dispatch or the SIP call: the worker resolves it from the dialed number', async () => {

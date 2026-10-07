@@ -4,7 +4,7 @@ import {
   type E164, type EngineAgentRef, type KnowledgeDoc, type NormalizedCallEvent, type NumberBinding,
   type TenantAgentConfig, type TenantId, type TenantRuntimeState, type VoiceEngine,
 } from '@1145/shared';
-import { E164_RE } from './dial-out.js';
+import { E164_RE, SMOKE_ROOM_PREFIX } from './dial-out.js';
 
 /**
  * LiveKit on Telnyx (default engine, ADR-0002). The "agent" is configuration in OUR table: the frontdesk worker
@@ -85,8 +85,9 @@ export class LiveKitTelnyxEngine implements VoiceEngine {
 
   async placeSmokeTestCall(ref: EngineAgentRef, from: E164, to: E164) {
     const tid = this.tenantOf(ref);
-    // The room name is informational: the worker never reads a tenant from it.
-    const roomName = `smoke-${tid}-${this.now().getTime()}-${this.newId()}`;
+    // The room name never decides the tenant (the worker resolves that from the dialed number). It is the call id:
+    // the worker uses the name of a `smoke-` room as the id on call.ended, which is what smoke-call polls for (D8-3).
+    const roomName = `${SMOKE_ROOM_PREFIX}${tid}-${this.now().getTime()}-${this.newId()}`;
     const callId = await this.deps.dialOut({ roomName, to, fromNumber: from, tenantId: tid });
     return { callId };
   }
