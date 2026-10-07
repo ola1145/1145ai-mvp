@@ -23,7 +23,7 @@ class FakeFifoQueue implements SqsLike {
   readonly delivered: SendMessageCommandInput[] = [];
   private readonly seen = new Set<string>();
   constructor(private readonly latencyMs = 0) {}
-  async send(command: SendMessageCommand): Promise<unknown> {
+  async send(command: SendMessageCommand, _options?: { abortSignal?: AbortSignal }): Promise<unknown> {
     if (!(command instanceof SendMessageCommand)) throw new Error('owner chat may only send messages');
     this.calls.push(command.input);
     if (this.latencyMs) await sleep(this.latencyMs);
