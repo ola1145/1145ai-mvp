@@ -60,18 +60,27 @@ function fakeDoc() {
     return { old, next, touched };
   }
 
+  /** Real DynamoDB rejects a request whose placeholders no expression uses, so this double does too. */
+  function strict(parts: { expressions: Array<string | undefined>; names?: Record<string, string>; values?: Record<string, unknown> }) {
+    const text = parts.expressions.filter(Boolean).join(' ');
+    for (const n of Object.keys(parts.names ?? {})) if (!new RegExp(`${n}(?![A-Za-z0-9_])`).test(text)) throw err(`ValidationException: unused ExpressionAttributeNames ${n}`);
+    for (const v of Object.keys(parts.values ?? {})) if (!new RegExp(`${v}(?![A-Za-z0-9_])`).test(text)) throw err(`ValidationException: unused ExpressionAttributeValues ${v}`);
+  }
+
   const doc = {
     table,
     log: [] as string[],
     async send(cmd: unknown): Promise<unknown> {
       if (cmd instanceof GetCommand) { doc.log.push('get'); return { Item: table.get(k(cmd.input.Key as never)) }; }
       if (cmd instanceof PutCommand) {
+        strict({ expressions: [cmd.input.ConditionExpression], names: cmd.input.ExpressionAttributeNames, values: cmd.input.ExpressionAttributeValues });
         const item = cmd.input.Item as Item;
         if (!holds(table.get(k(item as never)), cmd.input.ConditionExpression, { names: cmd.input.ExpressionAttributeNames, values: cmd.input.ExpressionAttributeValues })) throw err('ConditionalCheckFailedException');
         table.set(k(item as never), item); doc.log.push('put'); return {};
       }
       if (cmd instanceof UpdateCommand) {
         const ex = { names: cmd.input.ExpressionAttributeNames, values: cmd.input.ExpressionAttributeValues };
+        strict({ expressions: [cmd.input.UpdateExpression, cmd.input.ConditionExpression], ...ex });
         const key = cmd.input.Key as { PK: string; SK: string };
         if (!holds(table.get(k(key)), cmd.input.ConditionExpression, ex)) throw err('ConditionalCheckFailedException');
         const { old, next, touched } = update(key, cmd.input.UpdateExpression!, ex);
@@ -85,6 +94,7 @@ function fakeDoc() {
         for (const t of items) {
           if (t.Update) {
             const ex = { names: t.Update.ExpressionAttributeNames, values: t.Update.ExpressionAttributeValues };
+            strict({ expressions: [t.Update.UpdateExpression, t.Update.ConditionExpression], ...ex });
             if (!holds(table.get(k(t.Update.Key as never)), t.Update.ConditionExpression, ex)) throw err('TransactionCanceledException');
           } else if (t.Put) {
             const ex = { names: t.Put.ExpressionAttributeNames, values: t.Put.ExpressionAttributeValues };
