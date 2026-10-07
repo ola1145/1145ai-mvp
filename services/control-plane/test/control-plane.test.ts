@@ -191,6 +191,11 @@ describe('stripe signature', () => {
     expect(verifyStripeSignature(body, sig(now), [], 300, now)).toBe(false);
   });
 
+  it('never accepts an empty secret (an HMAC with an empty key is something anyone can compute)', () => {
+    expect(verifyStripeSignature(body, sig(now, ''), '', 300, now)).toBe(false);
+    expect(verifyStripeSignature(body, sig(now, ''), ['', 'whsec_new'], 300, now)).toBe(false);
+  });
+
   it('verifies raw bytes, so a Buffer and a string of the same bytes agree', () => {
     expect(verifyStripeSignature(Buffer.from(body), sig(now), secret, 300, now)).toBe(true);
   });
@@ -244,9 +249,9 @@ describe('stripe webhook: verified before parsing', () => {
     const evt = w.stripe.invoicePaid();
     const bad = w.stripe.deliver(evt, { secret: 'whsec_attacker' });
     const r = await w.send(bad);
+    expect(parse).not.toHaveBeenCalled(); // checked before `json(r)`, which parses our own response
     expect(r.statusCode).toBe(400);
     expect(json(r)).toEqual({ error: 'invalid_signature' });
-    expect(parse).not.toHaveBeenCalled();
     expect(w.store.touched).toBe(0);
     expect(w.audits).toEqual([]);
   });
