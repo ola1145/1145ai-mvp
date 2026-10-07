@@ -11,6 +11,8 @@
  * - Clicks that are not a friend do not count: the referrer opening their own link from inside the product, link-preview
  *   crawlers, scripts, and browser speculative loads. All of them still get the redirect.
  * - Storage trouble never strands the visitor. The redirect goes out either way, and the failure is logged.
+ * - The click log is rate limited (SEC-25, threat model F10): per source address, in this container's memory only, and per
+ *   code, in a shared hourly window. Past either limit the visitor still gets the redirect with ref; nothing is written.
  *
  * Click counts are a funnel metric. Rewards are decided elsewhere (H3: first paid invoice, one per verified tenant).
  */
@@ -40,7 +42,8 @@ export interface ReferralEvent {
   pathParameters?: { code?: string };
   headers?: Record<string, string | undefined>;
   cookies?: string[];
-  requestContext?: { http?: { method?: string; userAgent?: string } };
+  /** `sourceIp` is the address API Gateway saw. It is used to rate limit in memory and never stored. */
+  requestContext?: { http?: { method?: string; userAgent?: string; sourceIp?: string } };
 }
 
 export interface ReferralResponse {
@@ -61,9 +64,13 @@ export interface ReferralStore {
   recordClick(code: string, visitorId: string, kind: ClickKind): Promise<boolean>;
 }
 
+/** Asked only for requests that would write to the click log. Resolves false to skip the write (the redirect still goes out). */
+export interface ClickLimiter { allow(code: string, sourceIp: string): Promise<boolean> }
+
 export interface ReferralDeps extends ReferralStore {
   startUrl: string;
   newVisitorId(): string;
+  clickLimiter: ClickLimiter;
 }
 
 // ───────────────────────── store ─────────────────────────
@@ -116,6 +123,78 @@ export function createReferralStore(cfg: { doc: DocClient; tableName: string; no
         throw err;
       }
       return true;
+    },
+  };
+}
+
+// ───────────────────────── click-log limits (SEC-25) ─────────────────────────
+
+export interface ClickLimits { perIp: { limit: number; windowSec: number }; perCode: { limit: number; windowSec: number } }
+
+/**
+ * A person opens a handful of referral links in ten minutes at most, so 10 per address is far above real use and far below a
+ * script. Per code, 120 new clicks an hour is more than a small business's link gets when it is shared in a busy group chat;
+ * past it the count stops climbing until the next hour, which bounds what a spread-out flood can add to one code's chart.
+ */
+export const DEFAULT_CLICK_LIMITS: ClickLimits = {
+  perIp: { limit: 10, windowSec: 10 * 60 },
+  perCode: { limit: 120, windowSec: 3600 },
+};
+
+const MAX_TRACKED_ADDRESSES = 10_000;
+const RATE_KEEP_SECONDS = 3600;
+
+const windowStartOf = (nowMs: number, windowSec: number) => Math.floor(nowMs / 1000 / windowSec) * windowSec;
+
+/**
+ * Per address: a fixed window in this container's memory, so no address is ever written anywhere. Each warm container counts on
+ * its own, which is enough against one source (the stage throttle caps how many containers a flood can reach). Bounded, so a
+ * spray of distinct addresses cannot grow it.
+ * Per code: a shared fixed window under REFCLICK#<code> / RATE#<windowStart> (atomic ADD, ttl), inside the one IAM prefix the
+ * redirect may write. Without a table (`doc` unset) only the per-address limit applies.
+ */
+export function createClickLimiter(cfg: { doc?: DocClient; tableName?: string; limits?: Partial<ClickLimits>; now?: () => number }): ClickLimiter & { trackedAddresses(): number } {
+  const limits: ClickLimits = { ...DEFAULT_CLICK_LIMITS, ...cfg.limits };
+  const now = cfg.now ?? Date.now;
+  const seen = new Map<string, { windowStart: number; count: number }>();
+
+  function allowAddress(sourceIp: string): boolean {
+    const windowStart = windowStartOf(now(), limits.perIp.windowSec);
+    let entry = seen.get(sourceIp);
+    if (!entry || entry.windowStart !== windowStart) {
+      entry = { windowStart, count: 0 };
+      seen.delete(sourceIp);
+      seen.set(sourceIp, entry);
+      // Oldest first (insertion order). Dropping one only forgets a count, which errs toward counting a click.
+      for (const k of seen.keys()) {
+        if (seen.size <= MAX_TRACKED_ADDRESSES) break;
+        seen.delete(k);
+      }
+    }
+    entry.count += 1;
+    return entry.count <= limits.perIp.limit;
+  }
+
+  async function allowCode(code: string): Promise<boolean> {
+    if (!cfg.doc || !cfg.tableName) return true;
+    const windowStart = windowStartOf(now(), limits.perCode.windowSec);
+    const r = (await cfg.doc.send(new UpdateCommand({
+      TableName: cfg.tableName,
+      Key: { PK: `REFCLICK#${code}`, SK: `RATE#${windowStart}` },
+      UpdateExpression: 'ADD #n :one SET #ttl = :ttl',
+      ExpressionAttributeNames: { '#n': 'n', '#ttl': 'ttl' },
+      ExpressionAttributeValues: { ':one': 1, ':ttl': windowStart + limits.perCode.windowSec + RATE_KEEP_SECONDS },
+      ReturnValues: 'UPDATED_NEW',
+    }))) as { Attributes?: { n?: unknown } };
+    const n = typeof r.Attributes?.n === 'number' ? r.Attributes.n : Number.POSITIVE_INFINITY;
+    return n <= limits.perCode.limit;
+  }
+
+  return {
+    trackedAddresses: () => seen.size,
+    // The cheap, local check first: a flood from one address never reaches the table.
+    async allow(code, sourceIp) {
+      return allowAddress(sourceIp) && (await allowCode(code));
     },
   };
 }
@@ -195,6 +274,17 @@ export async function referralRedirect(event: ReferralEvent, deps: ReferralDeps)
   const kind = classify(event, headers);
   if (kind === 'skip') return redirect(deps.startUrl, code);
 
+  // SEC-25: past a limit, or when the shared counter cannot be reached, nothing is written and no cookie is set. The visitor still
+  // goes where the link points, with ref, because the count is only a funnel metric.
+  let allowed: boolean;
+  try {
+    allowed = await deps.clickLimiter.allow(code, event.requestContext?.http?.sourceIp || 'unknown');
+  } catch (err) {
+    logError('referral click limit unavailable, not counting', err);
+    allowed = false;
+  }
+  if (!allowed) return redirect(deps.startUrl, code);
+
   const existing = readCookie(event, headers, VISITOR_COOKIE);
   const returning = existing !== undefined && VISITOR_ID.test(existing);
   const visitorId = returning ? existing : deps.newVisitorId();
@@ -235,6 +325,8 @@ export function createProdDeps(env: NodeJS.ProcessEnv = process.env): ReferralDe
     ...createReferralStore({ doc, tableName }),
     startUrl: resolveStartUrl(env.APP_START_URL),
     newVisitorId: () => randomBytes(16).toString('base64url'),
+    // Built once per container (deps are cached below), so the per-address counts last as long as the container does.
+    clickLimiter: createClickLimiter({ doc, tableName }),
   };
 }
 

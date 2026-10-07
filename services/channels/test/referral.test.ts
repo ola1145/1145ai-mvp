@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DeleteCommand, GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import {
+  DEFAULT_CLICK_LIMITS,
   DEFAULT_START_URL,
+  createClickLimiter,
   createProdDeps,
   createReferralStore,
   referralRedirect,
   resolveStartUrl,
+  type ClickLimits,
   type ReferralDeps,
   type ReferralEvent,
 } from '../src/referral-redirect.js';
@@ -16,7 +19,7 @@ type Item = Record<string, unknown>;
 const keyOf = (k: { PK: string; SK: string }) => `${k.PK}|${k.SK}`;
 const awsError = (name: string) => Object.assign(new Error(name), { name });
 
-interface FakeOpts { failUpdate?: boolean; failGet?: boolean; failPut?: boolean }
+interface FakeOpts { failUpdate?: boolean; failGet?: boolean; failPut?: boolean; failRate?: boolean }
 
 function fakeDoc(opts: FakeOpts = {}) {
   const table = new Map<string, Item>();
@@ -44,9 +47,20 @@ function fakeDoc(opts: FakeOpts = {}) {
         return {};
       }
       if (cmd instanceof UpdateCommand) {
+        const expr = cmd.input.UpdateExpression ?? '';
+        if (/ADD\s+#n\s+:one/.test(expr)) {
+          // The per-code window counter (SEC-25): atomic add, returns the new count.
+          calls.push('rate');
+          if (opts.failRate) throw awsError('ProvisionedThroughputExceededException');
+          const k = keyOf(cmd.input.Key as never);
+          const v = cmd.input.ExpressionAttributeValues ?? {};
+          const cur = table.get(k) ?? { ...(cmd.input.Key as Item) };
+          const n = ((cur.n as number | undefined) ?? 0) + (v[':one'] as number);
+          table.set(k, { ...cur, n, ttl: v[':ttl'] });
+          return { Attributes: { n } };
+        }
         calls.push('update');
         if (opts.failUpdate) throw awsError('ProvisionedThroughputExceededException');
-        const expr = cmd.input.UpdateExpression ?? '';
         if (!/ADD\s+clicks\s+:one/.test(expr)) throw new Error(`fake does not understand update: ${expr}`);
         const v = cmd.input.ExpressionAttributeValues ?? {};
         const k = keyOf(cmd.input.Key as never);
@@ -70,28 +84,33 @@ const NOW_SEC = Math.floor(NOW.getTime() / 1000);
 const THIRTY_DAYS = 30 * 24 * 3600;
 const BROWSER = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
 
-function setup(opts: FakeOpts = {}, over: Partial<ReferralDeps> = {}) {
+function setup(opts: FakeOpts = {}, over: Partial<ReferralDeps> = {}, limits?: Partial<ClickLimits>) {
   const doc = fakeDoc(opts);
   doc.table.set('REFERRAL#FRIEND1|OWNER', { PK: 'REFERRAL#FRIEND1', SK: 'OWNER', referrerTid: 't_referrer01' });
   doc.table.set('REFERRAL#OTHER99|OWNER', { PK: 'REFERRAL#OTHER99', SK: 'OWNER', tid: 't_referrer02' });
   let n = 0;
+  const clock = { ms: NOW.getTime() };
   const store = createReferralStore({ doc, tableName: 't1145', now: () => NOW });
   const deps: ReferralDeps = {
     ...store,
     startUrl: DEFAULT_START_URL,
     newVisitorId: () => `visitor-id-number-${String(++n).padStart(4, '0')}`,
+    clickLimiter: createClickLimiter({ doc, tableName: 't1145', now: () => clock.ms, ...(limits ? { limits } : {}) }),
     ...over,
   };
-  return { doc, deps };
+  return { doc, deps, clock };
 }
 
+const IP = '203.0.113.7';
 const click = (code: string | undefined, extra: Partial<ReferralEvent> & { headers?: Record<string, string> } = {}): ReferralEvent => ({
   rawPath: `/r/${code ?? ''}`,
   pathParameters: code === undefined ? {} : { code },
-  requestContext: { http: { method: 'GET', userAgent: BROWSER } },
+  requestContext: { http: { method: 'GET', userAgent: BROWSER, sourceIp: IP } },
   headers: { 'user-agent': BROWSER },
   ...extra,
 });
+/** The same browser, from another address (what API Gateway reports as sourceIp). */
+const from = (sourceIp: string): Pick<ReferralEvent, 'requestContext'> => ({ requestContext: { http: { method: 'GET', userAgent: BROWSER, sourceIp } } });
 
 const clicks = (doc: ReturnType<typeof fakeDoc>, code = 'FRIEND1') => (doc.table.get(`REFCLICK#${code}|COUNT`)?.clicks as number | undefined) ?? 0;
 const visitorCookie = (res: { cookies?: string[] }) => res.cookies?.find((c) => c.startsWith('ref_v='));
@@ -371,6 +390,104 @@ describe('referral redirect: the target is fixed and a hiccup never strands the 
     expect(clicks(doc)).toBe(0);
     expect(log).toHaveBeenCalled();
     log.mockRestore();
+  });
+});
+
+// SEC-25 / threat model F10 (click-log flooding): a client that sends a fresh ref_v cookie with every request would otherwise add
+// one marker and one click per request. The redirect itself is never limited; only what gets written is.
+describe('referral redirect: click-log limits (SEC-25)', () => {
+  const visitors = (doc: ReturnType<typeof fakeDoc>, code = 'FRIEND1') => [...doc.table.keys()].filter((k) => k.startsWith(`REFCLICK#${code}|V#`)).length;
+
+  it('defaults to limits a real visitor never meets', () => {
+    expect(DEFAULT_CLICK_LIMITS.perIp.limit).toBeGreaterThanOrEqual(5);
+    expect(DEFAULT_CLICK_LIMITS.perIp.windowSec).toBeGreaterThanOrEqual(5 * 60);
+    expect(DEFAULT_CLICK_LIMITS.perCode.limit).toBeGreaterThan(DEFAULT_CLICK_LIMITS.perIp.limit);
+  });
+
+  it('one address with a fresh cookie every time adds at most the per-address limit, and every request still gets its redirect', async () => {
+    const { doc, deps } = setup();
+    const results = [];
+    for (let i = 0; i < 40; i++) results.push(await referralRedirect(click('FRIEND1'), deps));
+    expect(results.every((r) => r.statusCode === 302 && r.headers.location === 'https://app.1145.ai/start?ref=FRIEND1')).toBe(true);
+    expect(clicks(doc)).toBe(DEFAULT_CLICK_LIMITS.perIp.limit);
+    expect(visitors(doc)).toBe(DEFAULT_CLICK_LIMITS.perIp.limit);   // and no markers past it either
+  });
+
+  it('the per-address limit spans codes, so rotating codes does not get around it, and other addresses are untouched', async () => {
+    const { doc, deps } = setup({}, {}, { perIp: { limit: 3, windowSec: 600 } });
+    for (let i = 0; i < 3; i++) await referralRedirect(click('FRIEND1'), deps);
+    await referralRedirect(click('OTHER99'), deps);
+    expect(clicks(doc, 'FRIEND1') + clicks(doc, 'OTHER99')).toBe(3);
+    await referralRedirect(click('OTHER99', from('198.51.100.20')), deps);
+    expect(clicks(doc, 'OTHER99')).toBe(1);
+  });
+
+  it('counts the address API Gateway saw, never a header the client can write', async () => {
+    const { doc, deps } = setup({}, {}, { perIp: { limit: 2, windowSec: 600 } });
+    for (let i = 0; i < 5; i++) {
+      await referralRedirect(click('FRIEND1', { headers: { 'user-agent': BROWSER, 'x-forwarded-for': `10.0.0.${i}`, 'x-real-ip': `10.1.0.${i}` } }), deps);
+    }
+    expect(clicks(doc)).toBe(2);
+  });
+
+  it('many addresses on one code add at most the per-code limit in a window, then count again in the next', async () => {
+    const { doc, deps, clock } = setup({}, {}, { perCode: { limit: 4, windowSec: 3600 } });
+    clock.ms = Math.floor(clock.ms / 3_600_000) * 3_600_000;
+    for (let i = 0; i < 9; i++) await referralRedirect(click('FRIEND1', from(`192.0.2.${i + 1}`)), deps);
+    expect(clicks(doc)).toBe(4);
+    expect(clicks(doc, 'OTHER99')).toBe(0);
+    await referralRedirect(click('OTHER99', from('192.0.2.50')), deps);
+    expect(clicks(doc, 'OTHER99')).toBe(1);                         // one code's flood leaves the others alone
+    clock.ms += 3_600_000;
+    await referralRedirect(click('FRIEND1', from('192.0.2.99')), deps);
+    expect(clicks(doc)).toBe(5);
+  });
+
+  it('keeps the per-code window under REFCLICK#<code> with a ttl, and stores no address in any form', async () => {
+    const { doc, deps, clock } = setup();
+    await referralRedirect(click('FRIEND1'), deps);
+    const windowStart = Math.floor(clock.ms / 1000 / 3600) * 3600;
+    expect(doc.table.get(`REFCLICK#FRIEND1|RATE#${windowStart}`)).toMatchObject({ n: 1, ttl: windowStart + 3600 + 3600 });
+    const stored = JSON.stringify([...doc.table.entries()]);
+    expect(stored).not.toContain(IP);
+    expect([...doc.table.keys()].filter((k) => !/^REF(ERRAL|CLICK)#(FRIEND1|OTHER99)\|/.test(k))).toEqual([]);
+  });
+
+  it('bots, unknown codes and bad codes never reach the limiter, so they cannot use up a real visitor\'s allowance', async () => {
+    const { doc, deps } = setup({}, {}, { perIp: { limit: 1, windowSec: 600 } });
+    await referralRedirect(click('NOSUCH1'), deps);
+    await referralRedirect(click('../x'), deps);
+    await referralRedirect(click('FRIEND1', { requestContext: { http: { method: 'GET', userAgent: 'curl/8.7.1', sourceIp: IP } }, headers: { 'user-agent': 'curl/8.7.1' } }), deps);
+    expect(doc.calls.filter((c) => c === 'rate')).toEqual([]);
+    await referralRedirect(click('FRIEND1'), deps);
+    expect(clicks(doc)).toBe(1);
+  });
+
+  it('a limited request gets the redirect with ref but no cookie and no write', async () => {
+    const { doc, deps } = setup({}, {}, { perIp: { limit: 1, windowSec: 600 } });
+    await referralRedirect(click('FRIEND1'), deps);
+    const before = doc.calls.length;
+    const limited = await referralRedirect(click('FRIEND1'), deps);
+    expect(limited.headers.location).toBe('https://app.1145.ai/start?ref=FRIEND1');
+    expect(limited.cookies).toBeUndefined();
+    expect(doc.calls.slice(before).filter((c) => c === 'put' || c === 'update' || c === 'rate')).toEqual([]);
+  });
+
+  it('if the shared counter is down, the visitor is redirected with ref, nothing is counted, and it is logged', async () => {
+    const { doc, deps } = setup({ failRate: true });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await referralRedirect(click('FRIEND1'), deps);
+    expect(res.headers.location).toBe('https://app.1145.ai/start?ref=FRIEND1');
+    expect(clicks(doc)).toBe(0);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(String(log.mock.calls[0]![0])).not.toContain(IP);
+    log.mockRestore();
+  });
+
+  it('the in-memory per-address table cannot grow without bound', async () => {
+    const lim = createClickLimiter({ now: () => NOW.getTime() });
+    for (let i = 0; i < 25_000; i++) await lim.allow('FRIEND1', `10.${(i >> 16) & 255}.${(i >> 8) & 255}.${i & 255}`);
+    expect(lim.trackedAddresses()).toBeLessThanOrEqual(10_000);
   });
 });
 
