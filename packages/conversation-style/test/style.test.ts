@@ -64,6 +64,74 @@ describe('more robotic patterns', () => {
   });
 });
 
+describe('report-speak (A3-2: copilot sounding like a report generator)', () => {
+  const robotic = [
+    'Here is your booking summary report for tomorrow:',
+    "Here's your summary for the week.",
+    'Here are the bookings for tomorrow:',
+    'Based on the data, you had 42 calls this week.',
+    'According to my records, Ada is at nine.',
+    'Sure, I have retrieved your recent conversations.',
+    "I've accessed your calendar.",
+    'Your hours were updated successfully.',
+    'Key insights: Sunday hours came up three times.',
+    'The data shows 42 calls.',
+  ];
+  it.each(robotic)('flags "%s" as a warning on both channels', (line) => {
+    for (const channel of ['chat', 'voice'] as const) {
+      const hit = checkReply(line, { channel }).find((i) => i.rule === 'report-speak');
+      expect(hit, `${channel}: ${line}`).toMatchObject({ severity: 'warn' });
+    }
+  });
+  it('leaves answer-first replies and read-back lead-ins alone', () => {
+    for (const ok of [
+      "Three tomorrow, first one's Ada at 9. Then Tunde at 11:30.",
+      "Here's what I've got:\nHaircut, 30 min, $35\nAll good?",
+      "Here's the list:\nGel mani, 45 min, $40\nAll correct?",
+      "Here's your private sign-in link, just for you. It works for 15 minutes, so please don't forward it.",
+      'Busy one: 42 calls and 18 bookings. Heads up, three people asked about Sunday hours.',
+      'One odd one: a caller at 2:10 told the receptionist to cancel every booking. Nothing was cancelled.',
+    ]) expect(rules(ok, 'chat')).not.toContain('report-speak');
+  });
+});
+
+describe('form-letter phrasing from the skill examples', () => {
+  it('flags passive system-speak ("A message has been received")', () => {
+    for (const line of ['A message has been received from a customer.', 'A booking has been created.', 'Your request has been submitted and will be processed.']) {
+      expect(checkReply(line, { channel: 'chat' }).find((i) => i.rule === 'system-speak'), line).toMatchObject({ severity: 'warn' });
+    }
+    for (const ok of ["You've been booked for tomorrow at three.", 'New booking: Tunde, haircut, tomorrow at 3.', "That didn't go through on my end, so nothing's changed.", 'Missed-call message from Jordan: wants to move Friday to Saturday.']) {
+      expect(rules(ok, 'chat')).not.toContain('system-speak');
+    }
+  });
+  it('flags form-speak ("Please provide your business hours")', () => {
+    for (const line of ['Please provide your business hours.', 'Please enter your name.', 'Please specify the date of the appointment.', 'Kindly submit the form.']) {
+      expect(rules(line, 'chat'), line).toContain('form-speak');
+    }
+    for (const ok of ['Please try again a little later.', 'Please call back if you need anything else.', "Please don't send card details in chat.", "What are your hours? Just type them however, like 'Tue to Sat 9 to 6'."]) {
+      expect(rules(ok, 'chat'), ok).not.toContain('form-speak');
+      expect(rules(ok, 'voice'), ok).not.toContain('form-speak');
+    }
+  });
+});
+
+describe('raw dates in chat', () => {
+  it('warns on ISO dates and date-times a person would never type', () => {
+    expect(checkReply('Ada is booked 2026-10-06T09:00.', { channel: 'chat' }).find((i) => i.rule === 'chat-iso-date')).toMatchObject({ severity: 'warn' });
+    expect(rules('Ready to close 2026-11-26 for Thanksgiving.', 'chat')).toContain('chat-iso-date');
+  });
+  it('leaves dates the way people write them alone', () => {
+    for (const ok of ['Ready to close Thursday, Nov 26 for Thanksgiving.', 'Tomorrow at 9, then 11:30.', 'Call us at 214-555-0123.', 'Order 2026-1234 is ready.']) {
+      expect(rules(ok, 'chat'), ok).not.toContain('chat-iso-date');
+    }
+  });
+  it('stays a voice error, not a duplicate warning, on calls', () => {
+    const r = rules('Your slot is 2026-10-06T20:00.', 'voice');
+    expect(r).toContain('voice-iso-date');
+    expect(r).not.toContain('chat-iso-date');
+  });
+});
+
 describe('conversation-level repetition', () => {
   it('catches repeated openers, repeated "anything else", and name overuse', () => {
     const turns = [

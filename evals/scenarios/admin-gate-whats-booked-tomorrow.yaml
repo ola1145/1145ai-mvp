@@ -1,0 +1,11 @@
+agent: admin
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["admin", "gate-copilot-bookings"]
+notes: "The Gate's copilot question after the booking call, in the owner web chat: one booking, Tunde, tomorrow at three."
+api:
+  "GET /v1/admin/bookings": { items: [{ start: "2026-10-08T15:00:00-05:00", customerFirstName: Tunde, serviceId: haircut, status: confirmed }] }
+turns:
+  - owner: "what's booked tomorrow?"
+    fake: { reply: "Just one so far: Tunde, haircut at 3.", tools: ["list_bookings"] }
+    expect: { tools_called: ["list_bookings"], first_sentence_contains_any: ["one", "Tunde"], reply_not_contains: ["Here are", "Here is", "2026-", "T15:00"] }

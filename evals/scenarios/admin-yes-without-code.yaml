@@ -1,0 +1,14 @@
+agent: admin
+channel: telegram
+tenant_fixture: barber-frisco
+tags: ["admin", "confirm", "gate-proposal"]
+notes: "A3-2. 'yes' is not the code. Only 'CONFIRM <code>' applies a change (the router does it), so the copilot asks for it and never says it's done."
+api:
+  "POST /v1/admin/changes": { summary: "Closed Thursday, Nov 26 for Thanksgiving.", code: "4821" }
+turns:
+  - owner: "close us on thanksgiving"
+    fake: { reply: "Ready to close Thursday, Nov 26 for Thanksgiving. Reply CONFIRM 4821 and it goes live.", tools: ["propose_closed_date"] }
+    expect: { tools_called: ["propose_closed_date"], reply_contains: ["CONFIRM 4821"], reply_not_contains: ["2026-11-26", "updated", "all set"] }
+  - owner: "yes"
+    fake: { reply: "Send CONFIRM 4821 and it's live. The code is what makes it go through.", tools: [] }
+    expect: { tools_called: [], reply_contains: ["CONFIRM"], reply_not_contains: ["updated", "done", "all set"] }

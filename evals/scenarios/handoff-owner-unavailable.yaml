@@ -1,0 +1,17 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["handoff", "gate-handoff"]
+notes: "The owner can't take the call: transfer_to_team comes back with a message action instead of a transfer."
+api:
+  "POST /v1/tools/handoff": { action: message, sayToCaller: "Kemi's with a client right now. Want to leave a message so she can call you back?" }
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
+turns:
+  - caller: "Can I talk to Kemi? It's about a wedding booking."
+    fake: { reply: "Kemi's with a client right now. Want to leave a message so she can call you back?", tools: ["transfer_to_team"] }
+    expect: { tools_called: ["transfer_to_team"], reply_contains_any: ["message"], reply_not_contains: ["please hold", "transfer your call", "connecting you"] }
+  - caller: "Yeah, tell her it's Jide about the wedding cuts, call me back today."
+    fake: { reply: "Got it, Jide. She'll get your message about the wedding cuts.", tools: ["take_message"] }
+    expect: { tools_called: ["take_message"], reply_max_words: 25 }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

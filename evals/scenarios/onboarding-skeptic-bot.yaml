@@ -1,0 +1,18 @@
+agent: onboarding
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["skeptical", "onboarding"]
+notes: "A2-1. Mirrors web-skeptic-asks-if-bot in agents/tests/test_onboarding_tools.py: 'yes, AI' in the first words, never a price."
+turns:
+  - owner: "is this a bot?"
+    fake: { reply: "Yep, I'm an AI assistant. I help owners get an AI receptionist answering their phone, and it takes about five minutes. If you'd rather talk to a person, just say so and someone from 1145 will reply here.", tools: [] }
+    expect: { tools_called: [], first_sentence_contains_any: ["AI"], reply_not_contains: ["human", "real person", "not a bot"] }
+  - owner: "honestly sounds like a scam. how much is it"
+    fake: { reply: "Fair question. I don't have pricing in front of me and I'd rather not guess, so someone from 1145 can answer that here. What I can tell you is you keep your number, and only calls you miss get forwarded.", tools: [] }
+    expect: { tools_called: [], reply_contains_any: ["someone from 1145"], reply_not_contains: ["$", "free trial", "per month"] }
+  - owner: "will it sound like a robot to my clients? they hate that"
+    fake: { reply: "Fair, nobody wants that. It talks like a friendly front desk person, keeps it short, and tells callers up front that it's an AI. You'll get a test call at the end to hear it yourself. What's the salon called, and where are you?", tools: [] }
+    expect: { tools_called: [], reply_not_contains: ["sounds human", "can't tell", "indistinguishable"] }
+  - owner: "ok fine. Rosa's Nails, Austin"
+    fake: { reply: "Love it. I'm grabbing you a local Austin number now. What are your hours? Type them however you like.", tools: ["save_business_basics", "start_provisioning"] }
+    expect: { tools_called: ["save_business_basics", "start_provisioning"], tools_not_called: ["send_signup_link"] }

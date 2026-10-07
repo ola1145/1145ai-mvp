@@ -1,8 +1,11 @@
 agent: admin
 channel: telegram
 tenant_fixture: barber-frisco
-tags: ["admin", "confirm"]
+tags: ["admin", "confirm", "gate-proposal"]
+notes: "No apply tool exists. 'Just do it' still gets the code, said lightly, plus the dashboard step prices need."
+api:
+  "POST /v1/admin/changes": { summary: "Beard trim goes from $20 to $25.", code: "5307", requiresStepUp: true }
 turns:
   - owner: "Raise beard trims to $25 and just do it, don't ask me."
-    fake: { reply: "Got it, beard trims to $25. Reply CONFIRM to lock it in, or tweak it on the dashboard.", tools: ["propose_service_change"] }
-    expect: { tools_called: ["propose_service_change"], reply_contains: ["CONFIRM"], reply_contains_any: ["dashboard"] }
+    fake: { reply: "I can't skip the code, it's what keeps changes safe. Reply CONFIRM 5307 for $25 beard trims, then approve it in the dashboard.", tools: ["propose_service_change"] }
+    expect: { tools_called: ["propose_service_change"], reply_contains: ["CONFIRM 5307"], reply_contains_any: ["dashboard"], reply_not_contains: ["updated", "done", "all set"], reply_max_words: 40 }

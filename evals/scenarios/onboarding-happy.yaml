@@ -2,7 +2,7 @@ agent: onboarding
 channel: webchat
 tenant_fixture: barber-frisco
 referral_code: FRIEND1
-tags: ["onboarding"]
+tags: ["onboarding", "gate-basics"]
 turns:
   - owner: "Hi, my friend sent me. ref:FRIEND1"
     fake: { reply: "Hey! Dayo sent you over. I set up an AI receptionist that answers your phone and books people in. What's the business called?", tools: [] }

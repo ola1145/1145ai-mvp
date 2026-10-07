@@ -1,0 +1,25 @@
+agent: onboarding
+channel: telegram
+tenant_fixture: barber-frisco
+tags: ["onboarding", "rushed", "gate-basics", "gate-naming"]
+notes: "A2-1. Mirrors telegram-rushed-owner: everything in one message is saved in that turn, and setup finishes in 4 owner messages."
+api:
+  "POST /hours": { parsed: { "Mon-Fri": "8am-5pm", "Sat-Sun": closed } }
+  "POST /services": { parsed: [{ name: "Standard clean", minutes: 120, price: 120 }, { name: "Deep clean", minutes: 240, price: 240 }] }
+  "GET /facts": { facts: [] }
+  "GET /provisioning": { number: "+17205550133", numberDisplay: "(720) 555-0133", testCall: queued, forwarding: { steps: "From your business phone, dial *71 7205550133 and press call." } }
+turns:
+  - owner: "/start"
+    fake: { reply: "Hey! I set up an AI receptionist that answers your business line and books jobs, in about five minutes. What's the business called, and where are you?", tools: [] }
+    expect: { tools_called: [] }
+  - owner: "make it quick i have 5 min. Clean Sweep, house cleaning, Denver. M-F 8-5. standard clean 2hr $120, deep clean 4hr $240"
+    fake: { reply: "Quick it is, and that's most of it. Here's what I saved:\nMon–Fri: 8am–5pm\nStandard clean, 2 hours, $120\nDeep clean, 4 hours, $240\nI also sent you a sign-up link. Sign in with Google, then reply YES to the message that pops up. If anything above is off, just tell me.", tools: ["save_business_basics", "save_hours", "save_services", "send_signup_link"] }
+    expect: { tools_called: ["save_business_basics", "save_hours", "save_services", "send_signup_link"], tools_not_called: ["start_provisioning"], reply_contains: ["YES"] }
+  - owner: "YES"
+    fake: { reply: "You're in. Grabbing your Denver number now. Last thing, what should your receptionist be called?", tools: ["start_provisioning", "facts_to_confirm"] }
+    expect: { tools_called: ["start_provisioning"], tools_not_called: ["confirm_facts"] }
+  - owner: "whatever, Sam"
+    fake: { reply: "Sam it is. Your new number is (720) 555-0133. To send the calls you miss to Sam, dial *71 7205550133 from your business phone and press call. Sam will give you a quick test call in a minute.", tools: ["name_agent", "provisioning_status"] }
+    expect: { tools_called: ["name_agent", "provisioning_status"], reply_contains: ["(720) 555-0133"], reply_contains_any: ["test call"] }
+rules:
+  max_owner_messages_to_complete: 4

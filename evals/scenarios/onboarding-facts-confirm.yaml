@@ -1,0 +1,25 @@
+agent: onboarding
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["onboarding", "gate-facts", "gate-naming"]
+notes: "Facts found on the website are shown in plain words and confirmed before customers hear them; anything the owner isn't sure about is rejected."
+api:
+  "POST /hours": { parsed: { "Tue-Sat": "10am-7pm", "Sun-Mon": closed } }
+  "POST /services": { parsed: [{ name: "Cut and style", minutes: 60, price: 65 }, { name: Color, minutes: 120, price: 120 }] }
+  "GET /facts": { facts: [{ id: f1, text: "Free consultations on Tuesdays" }, { id: f2, text: "Street parking only" }] }
+  "GET /provisioning": { number: "+13055550148", numberDisplay: "(305) 555-0148", testCall: queued, forwarding: { steps: "From your business phone, dial *71 3055550148 and press call." } }
+turns:
+  - owner: "Bella Hair, salon in Miami, bellahair.com. Tue-Sat 10 to 7. cut and style 1hr $65, color 2hr $120"
+    fake: { reply: "Love it, that's most of what I need. I'm grabbing you a Miami number now. Here's what I saved:\nTue–Sat: 10am–7pm\nCut and style, 1 hour, $65\nColor, 2 hours, $120\nLook right?", tools: ["save_business_basics", "start_provisioning", "save_hours", "save_services"] }
+    expect: { tools_called: ["save_business_basics", "start_provisioning", "save_hours", "save_services"], tools_not_called: ["send_signup_link"] }
+  - owner: "yes"
+    fake: { reply: "Perfect. Two things from your website I want to check before customers hear them:\nFree consultations on Tuesdays\nStreet parking only\nBoth right?", tools: ["facts_to_confirm"] }
+    expect: { tools_called: ["facts_to_confirm"], tools_not_called: ["confirm_facts"], reply_contains: ["Free consultations", "Street parking"] }
+  - owner: "parking yes. not sure about the consultations, i think we stopped those"
+    fake: { reply: "Thanks, I'll keep the parking and leave the consultations out so nobody gets the wrong idea. Last thing, what do you want to call your receptionist?", tools: ["confirm_facts"] }
+    expect: { tools_called: ["confirm_facts"] }
+  - owner: "Ava"
+    fake: { reply: "Ava it is! Your new number is (305) 555-0148. To send the calls you miss to Ava, dial *71 3055550148 from your salon phone and press call. She'll give your cell a quick test call in a minute.", tools: ["name_agent", "provisioning_status"] }
+    expect: { tools_called: ["name_agent", "provisioning_status"], reply_contains: ["(305) 555-0148"], reply_contains_any: ["test call"] }
+rules:
+  max_owner_messages_to_complete: 4

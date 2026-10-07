@@ -1,11 +1,18 @@
 agent: customer
 channel: webchat
 tenant_fixture: barber-frisco
-tags: ["booking"]
+tags: ["booking", "gate-webchat"]
+api:
+  "POST /v1/tools/kb/search": { passages: [{ text: "Beard trim, 15 minutes, $15." }] }
+  "POST /v1/tools/availability": { slots: [{ start: "2026-10-10T09:00:00-05:00", spoken: "Saturday at 9am" }, { start: "2026-10-10T10:30:00-05:00", spoken: "Saturday at 10:30am" }] }
+  "POST /v1/tools/bookings": { sayToCaller: "You're booked for Saturday at 9am." }
 turns:
   - caller: "Do you do beard trims?"
-    fake: { reply: "We do! Want to book one?", tools: ["search_knowledge"] }
-    expect: { tools_called: ["search_knowledge"] }
+    fake: { reply: "We do! Fifteen minutes, $15. Want to book one?", tools: ["lookup_business_info"] }
+    expect: { tools_called: ["lookup_business_info"] }
   - caller: "Saturday morning."
-    fake: { reply: "Saturday I've got nine or ten-thirty. Either work?", tools: ["check_availability"] }
-    expect: { tools_called: ["check_availability"] }
+    fake: { reply: "Saturday I've got 9 or 10:30. Either work?", tools: ["check_availability"] }
+    expect: { tools_called: ["check_availability"], reply_not_contains: ["T09:00", "2026-"] }
+  - caller: "9. I'm Bisi"
+    fake: { reply: "You're in, Bisi. Beard trim Saturday at 9am, see you then!", tools: ["book_appointment"] }
+    expect: { tools_called: ["book_appointment"], reply_contains_any: ["Saturday"], reply_not_contains: ["T09:00", "2026-"] }

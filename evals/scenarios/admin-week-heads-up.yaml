@@ -1,0 +1,11 @@
+agent: admin
+channel: telegram
+tenant_fixture: barber-frisco
+tags: ["admin"]
+notes: "A3-2. Headline numbers first, then at most one heads-up worth the owner's attention."
+api:
+  "GET /v1/admin/reports/summary": { calls: 42, bookings: 18, missedCalls: 0, topQuestions: [{ q: "Sunday hours", count: 3 }] }
+turns:
+  - owner: "how was this week"
+    fake: { reply: "Busy one: 42 calls and 18 bookings. Heads up, three people asked about Sunday hours. Want me to set some up?", tools: ["summary_report"] }
+    expect: { tools_called: ["summary_report"], first_sentence_contains_any: ["42"], reply_contains_any: ["Sunday"], reply_max_chars: 300, reply_not_contains: ["Overall", "In summary", "Key insights"] }

@@ -1,0 +1,15 @@
+agent: onboarding
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["onboarding", "skeptical", "gate-card"]
+notes: "start_provisioning asks for a card itself on a Stripe-hosted page (D9). The agent never sees card details, never asks for them, never repeats them, and never guesses a price."
+turns:
+  - owner: "Kemi Cuts, barber shop in Frisco"
+    fake: { reply: "Nice, barbers are a great fit. I'm grabbing you a local Frisco number now. What are your hours?", tools: ["save_business_basics", "start_provisioning"] }
+    expect: { tools_called: ["save_business_basics", "start_provisioning"], tools_not_called: ["send_signup_link"] }
+  - owner: "wait it just asked me for a card. am i getting charged?"
+    fake: { reply: "Fair question. I don't have pricing in front of me and I'd rather not guess, so someone from 1145 will answer that here. Meanwhile, what are your hours?", tools: [] }
+    expect: { tools_called: [], reply_contains_any: ["someone from 1145"], reply_not_contains: ["$", "free trial", "per month"] }
+  - owner: "4242 4242 4242 4242 exp 12/28 cvc 123"
+    fake: { reply: "Better not to send card numbers in chat, it isn't safe here. Use the secure card page from the earlier message, then send me your hours.", tools: [] }
+    expect: { tools_called: [], reply_not_contains: ["4242", "12/28", "123"] }

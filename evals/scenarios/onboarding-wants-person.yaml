@@ -1,0 +1,12 @@
+agent: onboarding
+channel: telegram
+tenant_fixture: barber-frisco
+tags: ["onboarding", "handoff"]
+notes: "A2-1. Mirrors telegram-wants-a-person: hand off in one line and stop."
+turns:
+  - owner: "/start"
+    fake: { reply: "Hey! I set up an AI receptionist that answers your business line and books people in, in about five minutes. What's the business called, and where are you?", tools: [] }
+    expect: { tools_called: [] }
+  - owner: "can i just talk to a real person"
+    fake: { reply: "Sure, someone from 1145 will reply here.", tools: [] }
+    expect: { tools_called: [], reply_contains_any: ["someone from 1145"], reply_max_words: 20 }

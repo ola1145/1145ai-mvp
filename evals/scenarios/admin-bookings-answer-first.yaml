@@ -1,0 +1,11 @@
+agent: admin
+channel: telegram
+tenant_fixture: barber-frisco
+tags: ["admin"]
+notes: "A3-2. Answer first: the count in the first sentence, times in words, no report lead-in."
+api:
+  "GET /v1/admin/bookings": { items: [{ start: "2026-10-08T09:00:00-05:00", customerFirstName: Ada, serviceId: haircut, status: confirmed }, { start: "2026-10-08T11:30:00-05:00", customerFirstName: Tunde, serviceId: haircut, status: confirmed }, { start: "2026-10-08T14:00:00-05:00", customerFirstName: Bisi, serviceId: beard-trim, status: confirmed }, { start: "2026-10-08T16:00:00-05:00", customerFirstName: Kayode, serviceId: haircut, status: cancelled }] }
+turns:
+  - owner: "what's tomorrow look like"
+    fake: { reply: "Three tomorrow, first one's Ada at 9. Then Tunde at 11:30 and Bisi at 2. Kayode cancelled the 4 o'clock.", tools: ["list_bookings"] }
+    expect: { tools_called: ["list_bookings"], first_sentence_contains_any: ["three", "3"], reply_not_contains: ["Here is", "Here's your", "summary report", "T09:00", "2026-"] }

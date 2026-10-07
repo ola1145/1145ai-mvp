@@ -1,0 +1,14 @@
+agent: customer
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["handoff", "gate-handoff"]
+notes: "Nobody can chat live, so the handoff becomes a message. Never claims the booking was moved."
+api:
+  "POST /v1/tools/handoff": { action: message, sayToCaller: "Nobody from the team can chat right now. I can pass them a message." }
+turns:
+  - caller: "can i talk to an actual person"
+    fake: { reply: "Nobody from the team is free to chat right now, but I can get them a message. What's it about?", tools: ["transfer_to_team"] }
+    expect: { tools_called: ["transfer_to_team"], reply_contains_any: ["message"], reply_not_contains: ["please hold", "transfer"] }
+  - caller: "need to move my sat appt, it's Ngozi"
+    fake: { reply: "Got it, Ngozi. I've sent that to the team, and they'll reach out to move it.", tools: ["take_message"] }
+    expect: { tools_called: ["take_message"], reply_not_contains: ["moved", "rescheduled"] }

@@ -1,0 +1,31 @@
+agent: onboarding
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["onboarding", "gate-basics"]
+notes: "A2-1. facts_to_confirm comes back empty: skip the step, no confirm_facts and no empty 'is this right?' turn."
+api:
+  "POST /hours": { parsed: { "Mon-Fri": "8am-6pm", Sat: "9am-2pm", Sun: closed } }
+  "POST /services": { parsed: [{ name: "Oil change", minutes: 30, price: 49 }, { name: Diagnostics, minutes: 60, price: 89 }] }
+  "GET /facts": { facts: [] }
+  "GET /provisioning": { number: "+12145550177", numberDisplay: "(214) 555-0177", testCall: queued, forwarding: { steps: "From your business phone, dial *71 2145550177 and press call." } }
+turns:
+  - owner: "Hi, I run Tunde's Auto, auto repair in Dallas"
+    fake: { reply: "Nice, repair shops miss a ton of calls, so this'll help. I'm grabbing you a local Dallas number now. What are your hours?", tools: ["save_business_basics", "start_provisioning"] }
+    expect: { tools_called: ["save_business_basics", "start_provisioning"], tools_not_called: ["send_signup_link"] }
+  - owner: "Mon-Fri 8-6, Sat 9-2"
+    fake: { reply: "Here's what I have:\nMon–Fri: 8am–6pm\nSat: 9am–2pm\nSun: closed\nThat right?", tools: ["save_hours"] }
+    expect: { tools_called: ["save_hours"], reply_contains_any: ["Mon"] }
+  - owner: "yes"
+    fake: { reply: "Cool. What are the main jobs people book? A rough time and price for each is plenty.", tools: [] }
+    expect: { tools_called: [] }
+  - owner: "Oil change 30 min $49, diagnostics 1 hr $89"
+    fake: { reply: "Got it:\nOil change, 30 min, $49\nDiagnostics, 1 hour, $89\nLook good?", tools: ["save_services"] }
+    expect: { tools_called: ["save_services"] }
+  - owner: "yep"
+    fake: { reply: "Sweet. Last thing, what should your receptionist be called?", tools: ["facts_to_confirm"] }
+    expect: { tools_called: ["facts_to_confirm"], tools_not_called: ["confirm_facts"], reply_not_contains: ["website", "right?", "correct?", "check before"] }
+  - owner: "Max"
+    fake: { reply: "Max it is. Your new number is (214) 555-0177. To send the calls you miss to Max, dial *71 2145550177 from your shop phone and press call. Max will ring your cell for a quick test in a minute.", tools: ["name_agent", "provisioning_status"] }
+    expect: { tools_called: ["name_agent", "provisioning_status"], reply_contains: ["(214) 555-0177"] }
+rules:
+  max_owner_messages_to_complete: 6

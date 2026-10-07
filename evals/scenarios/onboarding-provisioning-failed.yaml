@@ -1,0 +1,11 @@
+agent: onboarding
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["onboarding", "gate-failure"]
+notes: "start_provisioning failed. Say so plainly, don't promise a number, keep going with hours and retry."
+api:
+  "POST /provisioning": { error: unavailable, status: 503 }
+turns:
+  - owner: "Kemi Cuts, barber shop in Frisco TX"
+    fake: { reply: "Nice, barbers are a great fit. Setting up your number hit a snag on my end, so I'll try again in a minute. Meanwhile, what are your hours?", tools: ["save_business_basics", "start_provisioning"] }
+    expect: { tools_called: ["save_business_basics", "start_provisioning"], reply_contains_any: ["hours"], reply_not_contains: ["number now", "on the way", "inconvenience", "apologize"] }

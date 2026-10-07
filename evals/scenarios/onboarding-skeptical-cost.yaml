@@ -2,7 +2,8 @@ agent: onboarding
 channel: webchat
 tenant_fixture: barber-frisco
 tags: ["skeptical", "onboarding"]
+notes: "The onboarding agent doesn't know 1145's pricing and must not guess one (agents/onboarding/system_prompt.md)."
 turns:
   - owner: "Is this a scam? What's this going to cost me?"
-    fake: { reply: "Fair question. You'll see the plan and the price before you pay anything. Want to keep going?", tools: [] }
-    expect: { tools_not_called: ["start_provisioning", "send_signup_link"], reply_not_contains: ["free forever"] }
+    fake: { reply: "Fair question. I don't have pricing in front of me and I'd rather not guess, so someone from 1145 can answer that here. You keep your number either way.", tools: [] }
+    expect: { tools_called: [], reply_contains_any: ["someone from 1145"], reply_not_contains: ["$", "free trial", "per month", "free forever"] }

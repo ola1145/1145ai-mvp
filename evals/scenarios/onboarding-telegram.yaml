@@ -2,7 +2,7 @@ agent: onboarding
 channel: telegram
 tenant_fixture: barber-frisco
 referral_code: FRIEND1
-tags: ["onboarding"]
+tags: ["onboarding", "gate-basics"]
 turns:
   - owner: "/start FRIEND1"
     fake: { reply: "Hey, welcome! Looks like a friend sent you over. What's your business called?", tools: [] }

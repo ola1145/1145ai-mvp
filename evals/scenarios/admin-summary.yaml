@@ -2,7 +2,9 @@ agent: admin
 channel: telegram
 tenant_fixture: barber-frisco
 tags: ["admin"]
+api:
+  "GET /v1/admin/reports/summary": { calls: 5, bookings: 3, newCustomers: 1, missedCalls: 0, topQuestions: [] }
 turns:
   - owner: "How'd today go?"
-    fake: { reply: "Three bookings, one new customer. Next up is Ada at nine tomorrow.", tools: ["get_summary_report"] }
-    expect: { tools_called: ["get_summary_report"], reply_max_chars: 200 }
+    fake: { reply: "Good one: five calls and three bookings, one from a new customer. Nothing needs you.", tools: ["summary_report"] }
+    expect: { tools_called: ["summary_report"], first_sentence_contains_any: ["five", "5", "three", "3"], reply_max_chars: 200, reply_not_contains: ["Here's your", "summary report", "Overall"] }

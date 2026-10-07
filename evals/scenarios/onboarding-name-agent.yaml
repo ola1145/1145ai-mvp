@@ -1,0 +1,25 @@
+agent: onboarding
+channel: webchat
+tenant_fixture: barber-frisco
+tags: ["onboarding", "gate-naming"]
+notes: "If the owner doesn't care about the receptionist's name, offer one and wait for a yes before naming."
+api:
+  "POST /hours": { parsed: { "Mon-Sat": "9am-7pm", Sun: closed } }
+  "POST /services": { parsed: [{ name: Cut, minutes: 30, price: 30 }, { name: Shave, minutes: 20, price: 20 }] }
+  "GET /facts": { facts: [] }
+  "GET /provisioning": { number: "+14695550199", numberDisplay: "(469) 555-0199", testCall: queued, forwarding: { steps: "From your business phone, dial *71 4695550199 and press call." } }
+turns:
+  - owner: "Ade's Barbers, Plano. Mon-Sat 9-7. cuts 30 min $30, shave 20 min $20"
+    fake: { reply: "Nice, that's everything I need to start. I'm grabbing you a Plano number now. Here's what I saved:\nMon–Sat: 9am–7pm\nCut, 30 min, $30\nShave, 20 min, $20\nLook right?", tools: ["save_business_basics", "start_provisioning", "save_hours", "save_services"] }
+    expect: { tools_called: ["save_business_basics", "start_provisioning", "save_hours", "save_services"] }
+  - owner: "yep"
+    fake: { reply: "Great. Last thing, what should your receptionist be called?", tools: ["facts_to_confirm"] }
+    expect: { tools_called: ["facts_to_confirm"], tools_not_called: ["confirm_facts"] }
+  - owner: "idk, you pick"
+    fake: { reply: "Want me to just go with Ava?", tools: [] }
+    expect: { tools_not_called: ["name_agent"], reply_contains: ["Ava"] }
+  - owner: "sure"
+    fake: { reply: "Ava it is! Your new number is (469) 555-0199. To send the calls you miss to Ava, dial *71 4695550199 from your shop phone and press call. She'll ring your cell for a quick test in a minute.", tools: ["name_agent", "provisioning_status"] }
+    expect: { tools_called: ["name_agent", "provisioning_status"], reply_contains: ["(469) 555-0199"] }
+rules:
+  max_owner_messages_to_complete: 4

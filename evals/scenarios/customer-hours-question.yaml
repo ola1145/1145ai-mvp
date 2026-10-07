@@ -5,7 +5,7 @@ tags: ["kb"]
 greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
 turns:
   - caller: "What are your hours?"
-    fake: { reply: "Tuesday through Saturday, nine to six. Closed Sunday and Monday.", tools: ["search_knowledge"] }
-    expect: { tools_called: ["search_knowledge"], reply_not_contains: ["http"] }
+    fake: { reply: "Tuesday through Saturday, nine to six. Closed Sunday and Monday.", tools: ["lookup_business_info"] }
+    expect: { tools_called: ["lookup_business_info"], reply_not_contains: ["http"] }
 rules:
   first_utterance_contains: ["AI", "recorded"]

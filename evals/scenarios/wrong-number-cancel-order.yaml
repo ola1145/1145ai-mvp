@@ -6,6 +6,6 @@ greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are r
 turns:
   - caller: "I need to cancel my pizza order."
     fake: { reply: "I think you've reached a barber shop, Kemi Cuts. You might have the wrong number. Want me to take a message anyway?", tools: [] }
-    expect: { tools_not_called: ["cancel_booking"] }
+    expect: { tools_called: [], reply_not_contains: ["cancelled"] }
 rules:
   first_utterance_contains: ["AI", "recorded"]

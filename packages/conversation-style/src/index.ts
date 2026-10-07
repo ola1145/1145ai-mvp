@@ -32,6 +32,12 @@ const PHRASES: Array<[string, RegExp, Severity]> = [
   ['stiff-refusal', /\bi(?:'m| am) (?:unable|not able) to (?:assist|help|process|complete)\b|\bi (?:cannot|can't) (?:assist|help) with (?:that|this)(?: request)?\b/i, 'warn'],
   ['formal-apology', /\bi apologi[sz]e\b/i, 'warn'],
   ['hold-script', /\bplease hold\b/i, 'warn'],
+  // Sounds like a report generator (A3-2). Narrow on purpose: "Here's what I've got:" before a read-back is fine.
+  ['report-speak', /\bhere(?:'s| is| are) (?:your|the) (?:\w+ )?(?:summary|report|bookings|overview|breakdown)\b|\bsummary report\b|\bbased on (?:the|my|your) (?:data|records|information)\b|\baccording to (?:my|our|the) (?:records|data|system)\b|\bi(?:'ve| have) (?:successfully )?(?:retrieved|accessed|fetched|queried)\b|\bsuccessfully\b|\bkey (?:insights|takeaways|metrics|highlights)\b|\bthe data (?:shows|indicates|suggests)\b|\bplease find (?:attached|below)\b/i, 'warn'],
+  // Passive system voice: "A message has been received" instead of leading with the news.
+  ['system-speak', /\b(?:has|have) been (?:successfully )?(?:received|created|processed|submitted|generated|initiated|logged)\b|\bwill be processed\b/i, 'warn'],
+  // Reads like a form field: "Please provide your business hours."
+  ['form-speak', /\b(?:please|kindly) (?:provide|enter|submit|specify|input|fill (?:in|out))\b/i, 'warn'],
 ];
 
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean);
@@ -68,6 +74,7 @@ export function checkReply(reply: string, opts: StyleOptions): StyleIssue[] {
   } else {
     if (text.length > 600) add('chat-length', 'warn', `${text.length} chars; chat replies should be short`);
     if (/^#+\s/m.test(text)) add('chat-headers', 'error', 'no headings in chat replies');
+    if (/\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?/.test(text)) add('chat-iso-date', 'warn', 'write dates the way people do ("Thursday, Nov 26", "tomorrow at 9")');
   }
 
   const prev = opts.previousAgentTurns ?? [];

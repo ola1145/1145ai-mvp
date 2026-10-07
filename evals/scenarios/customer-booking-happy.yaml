@@ -1,7 +1,7 @@
 agent: customer
 channel: voice
 tenant_fixture: barber-frisco
-tags: ["booking"]
+tags: ["booking", "gate-booking-call"]
 greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
 turns:
   - caller: "Hi, can I get a haircut tomorrow afternoon?"

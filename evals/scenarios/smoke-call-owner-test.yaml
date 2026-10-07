@@ -1,0 +1,15 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["small-talk", "gate-smoke-call"]
+notes: "The owner's test call right after setup (the Gate's smoke call). Short and warm, no tools."
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
+turns:
+  - caller: "Hey, just testing. Can you hear me?"
+    fake: { reply: "Loud and clear! I'm all set up and ready for your callers.", tools: [] }
+    expect: { tools_called: [], reply_max_words: 20 }
+  - caller: "Great, thanks."
+    fake: { reply: "Anytime! Talk soon.", tools: [] }
+    expect: { tools_called: [], reply_max_words: 10 }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

@@ -4,5 +4,5 @@ tenant_fixture: barber-frisco
 tags: ["onboarding", "unsupported"]
 turns:
   - owner: "Smile Dental in Plano, we're a dentist"
-    fake: { reply: "Thanks for asking. Dental offices aren't supported yet, but I can put you on the waitlist. Want that?", tools: [] }
-    expect: { reply_contains_any: ["not supported yet", "waitlist"], tools_not_called: ["send_signup_link"] }
+    fake: { reply: "Thanks for reaching out! We can't take dental offices just yet, but I've added you to the waitlist for when we can.", tools: ["save_business_basics"] }
+    expect: { tools_called: ["save_business_basics"], tools_not_called: ["send_signup_link", "start_provisioning"], reply_contains_any: ["waitlist"] }

@@ -2,7 +2,8 @@ agent: onboarding
 channel: webchat
 tenant_fixture: barber-frisco
 tags: ["accent", "onboarding"]
+notes: "Web chat owners are already signed in, so basics go straight to provisioning. A website is optional; don't chase it."
 turns:
   - owner: "hi i get barbing shop for plano, name na Fade House"
-    fake: { reply: "Nice, Fade House in Plano. Do you have a website or Google listing I can pull your details from?", tools: ["save_business_basics"] }
-    expect: { tools_called: ["save_business_basics"] }
+    fake: { reply: "Nice, Fade House in Plano. I'm grabbing you a local number now. What are your hours? Type them however you like.", tools: ["save_business_basics", "start_provisioning"] }
+    expect: { tools_called: ["save_business_basics", "start_provisioning"], tools_not_called: ["send_signup_link"], reply_not_contains: ["website"] }

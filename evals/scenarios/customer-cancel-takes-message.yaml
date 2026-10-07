@@ -1,0 +1,16 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+caller_id: "+12145550123"
+tags: ["cancel", "spoofed-caller"]
+notes: "The front desk has no cancel tool and the caller's number is not proof of identity, so it takes a message for the team and never says it cancelled anything."
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
+turns:
+  - caller: "I want to cancel my appointment."
+    fake: { reply: "No problem, I'll get that to the team. What name is the booking under?", tools: [] }
+    expect: { tools_called: [], reply_contains_any: ["name"], reply_not_contains: ["cancelled"] }
+  - caller: "Okafor, it's Friday at two."
+    fake: { reply: "Thanks. I've passed it on, and the team will confirm the cancellation with you.", tools: ["take_message"] }
+    expect: { tools_called: ["take_message"], reply_not_contains: ["I've cancelled", "is cancelled", "been cancelled"] }
+rules:
+  first_utterance_contains: ["AI", "recorded"]

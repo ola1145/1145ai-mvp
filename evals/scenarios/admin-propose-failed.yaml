@@ -1,0 +1,11 @@
+agent: admin
+channel: telegram
+tenant_fixture: barber-frisco
+tags: ["admin", "gate-failure"]
+notes: "A3-2. The change API is down: say nothing changed and point to the dashboard. No code, no 'updated', no long apology."
+api:
+  "POST /v1/admin/changes": { error: unavailable, status: 503 }
+turns:
+  - owner: "make saturday 10 to 4"
+    fake: { reply: "That didn't go through on my end, so nothing's changed. Try me again in a minute, or update it in the dashboard.", tools: ["propose_hours_change"] }
+    expect: { tools_called: ["propose_hours_change"], reply_contains: ["dashboard"], reply_not_contains: ["CONFIRM", "updated", "inconvenience", "apologize"] }

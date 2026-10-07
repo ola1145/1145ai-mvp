@@ -1,0 +1,17 @@
+agent: customer
+channel: voice
+tenant_fixture: barber-frisco
+tags: ["booking", "gate-failure"]
+notes: "The tool API is down. Say it plainly, offer a message, and never claim a booking."
+api:
+  "POST /v1/tools/availability": { error: unavailable, sayToCaller: "I'm having trouble with that right now. Let me take a message so the team can call you back." }
+greeting: "Hi, this is Ava at Kemi Cuts. I'm the AI receptionist and calls are recorded. What can I do for you?"
+turns:
+  - caller: "Can I get a haircut Saturday at ten?"
+    fake: { reply: "Sorry, I can't see the calendar right now. Want me to take a message so the team can call you back and book you?", tools: ["check_availability"] }
+    expect: { tools_called: ["check_availability"], tools_not_called: ["book_appointment"], reply_contains_any: ["message"], reply_not_contains: ["booked", "all set", "inconvenience", "apologize"], reply_max_words: 30 }
+  - caller: "Yeah. It's Femi, Saturday at ten for a cut."
+    fake: { reply: "Got it, Femi. I've passed that on, and they'll call you back to lock in Saturday.", tools: ["take_message"] }
+    expect: { tools_called: ["take_message"], reply_not_contains: ["you're booked", "all set", "confirmed"] }
+rules:
+  first_utterance_contains: ["AI", "recorded"]
