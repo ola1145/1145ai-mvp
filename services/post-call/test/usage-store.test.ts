@@ -4,17 +4,20 @@
  * The DynamoDB adapters are exercised against FakeDynamo below: a small in-memory table that evaluates the
  * condition and update expressions the adapters send, runs transactions all-or-nothing, and refuses any key outside
  * the partitions it was handed (the ADR-0003 LeadingKeys rule). Stripe is a fake behind StripeUsageClient.
+ * The last block drives the real Lambda path (`createHandler` -> `onCallEnded` -> the three factories G3 loads by
+ * name) with fakes for S3, Bedrock and EventBridge, so the two lanes can only be green together.
  * Nothing here touches the network.
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { asTenantId, makeEvent, type EventEnvelope } from '@1145/shared';
-import { onCallEnded, type PostCallDeps } from '../src/handler.js';
+import { PostCallError } from '../src/handler.js';
+import { createHandler, createPostCallDeps, eventBridgePublisher, loadG2Ports, type G2Env } from '../src/deps.js';
 import {
+  createCrm,
   createDdbCustomerStore,
   customerIdForPhone,
-  makeUpsertCustomerFromCall,
   normalizePhone,
   planCustomerWrite,
   upsertCustomerFromCall,
@@ -25,8 +28,8 @@ import {
   DEFAULT_CAP_SEC,
   MAX_CALL_SECONDS,
   createDdbUsageStore,
+  createUsageStore,
   crossedThreshold,
-  makeAddUsage,
   recordCallUsage,
   usageMonth,
   type UsageDeps,
@@ -35,13 +38,15 @@ import {
   STRIPE_METER_EVENT_NAME,
   assertStripeTestKey,
   createDdbBillingStore,
+  createStripeUsage,
   createStripeUsageClient,
-  makeReportStripeUsage,
+  readStripeKey,
   reportStripeUsage,
   stripeMeterClient,
   type MeterEventInput,
   type StripeUsageClient,
   type StripeUsageDeps,
+  type StripeUsageSeams,
 } from '../src/stripe-usage.js';
 
 // ───────────────────────────── in-memory DynamoDB ─────────────────────────────
@@ -267,7 +272,7 @@ class FakeDynamo {
         const next = applyUpdate(String(input.UpdateExpression), cur ?? { PK: input.Key.PK, SK: input.Key.SK }, input.ExpressionAttributeNames, input.ExpressionAttributeValues);
         this.items.set(key, next);
         if (!this.gsiLag) this.syncGsi();
-        return input.ReturnValues === 'UPDATED_NEW' ? { Attributes: structuredClone(next) } : {};
+        return input.ReturnValues === 'UPDATED_NEW' || input.ReturnValues === 'ALL_NEW' ? { Attributes: structuredClone(next) } : {};
       }
 
       if (cmd instanceof TransactWriteCommand) {
@@ -313,9 +318,17 @@ const NOW_MS = Date.parse(NOW);
 const PHONE = '+12145550123';
 const tenantScope = (tid: string) => (pk: string) => pk === `TENANT#${tid}` || pk.startsWith(`TENANT#${tid}#`);
 
+/** What the post-call role may touch (infra/cdk/lib/postcall-stack.ts): the tenant partitions and the number routes. */
+const lambdaScope = (pk: string) => pk.startsWith('TENANT#') || pk.startsWith('NUMBER#');
+
 function world() {
   const db = new FakeDynamo();
-  return { db, docFor: (tid: string) => db.client(tenantScope(tid)), routeDoc: db.client((pk) => pk.startsWith('NUMBER#')) };
+  return { db, docFor: (tid: string) => db.client(tenantScope(tid)), routeDoc: db.client((pk) => pk.startsWith('NUMBER#')), lambda: db.client(lambdaScope) };
+}
+
+/** The environment deps.ts hands every G2 factory: the Lambda's own client, the table, the publisher and the clock. */
+function envFor(w: ReturnType<typeof world>, published: EventEnvelope[] = [], extra: Record<string, unknown> = {}) {
+  return { db: w.lambda, table: TABLE, publish: async (e: EventEnvelope) => { published.push(e); }, now: () => new Date(NOW), stripeSecretId: '1145/stripe', ...extra };
 }
 
 function seedTenant(db: FakeDynamo, tid: string, p: { state?: string; capSec?: number; numbers?: string[]; stripeCustomerId?: string } = {}) {
@@ -544,17 +557,35 @@ describe('CRM upsert from a call', () => {
     expect(empty).toMatchObject({ kind: 'touch', fillName: { expect: undefined, name: 'Kemi' }, fillPhones: true, seen: { expect: undefined } });
   });
 
-  it('the PostCallDeps adapter looks up the caller server-side and skips when there is none', async () => {
-    const { db, store } = setup();
-    let facts: { phone?: string; at?: string } | undefined = { phone: PHONE, at: NOW };
-    const upsert: PostCallDeps['upsertCustomerFromCall'] = makeUpsertCustomerFromCall({ store, callerFor: async () => facts, now: () => new Date(NOW) });
-    await upsert(A, 'call-1', 'Booked a haircut.');
-    expect(customersOf(db, A)[0]).toMatchObject({ callCount: 1, lastCallSummary: 'Booked a haircut.' });
-    facts = undefined;
+  it('createCrm: the number comes from the caller argument (the handler reads it from the transcript), and a call without one is skipped', async () => {
+    const w = world();
+    const { upsertCustomerFromCall: upsert } = createCrm(envFor(w));
+    await upsert(A, 'call-1', 'Booked a haircut.', { phone: PHONE, at: NOW });
+    expect(customersOf(w.db, A)[0]).toMatchObject({ callCount: 1, lastCallSummary: 'Booked a haircut.', lastSeen: NOW });
     await upsert(A, 'call-2', 'No number on this one.');
-    facts = { at: NOW };
-    await upsert(A, 'call-3', 'Still no number.');
-    expect(customersOf(db, A)[0]!.callCount).toBe(1);
+    await upsert(A, 'call-3', 'Still no number.', { at: NOW });
+    await upsert(A, 'call-4', 'A number that is not E.164.', { phone: '555-1234', at: NOW });
+    expect(customersOf(w.db, A)).toHaveLength(1);
+    expect(customersOf(w.db, A)[0]!.callCount).toBe(1);
+  });
+
+  it('createCrm: the call time is the event time when given, so a late retry does not move lastSeen to the retry', async () => {
+    const w = world();
+    const { upsertCustomerFromCall: upsert } = createCrm(envFor(w)); // the env clock says NOW
+    await upsert(A, 'call-1', 'Booked.', { phone: PHONE, at: new Date('2026-10-05T09:00:00.000Z') });
+    expect(customersOf(w.db, A)[0]!.lastSeen).toBe('2026-10-05T09:00:00.000Z');
+    await upsert(A, 'call-2', 'Rang again.', { phone: PHONE }); // no time given: falls back to the env clock
+    expect(customersOf(w.db, A)[0]!.lastSeen).toBe(NOW);
+  });
+
+  it('createCrm: keeps tenants apart and replays one call once', async () => {
+    const w = world();
+    const { upsertCustomerFromCall: upsert } = createCrm(envFor(w));
+    for (let n = 0; n < 3; n++) await upsert(A, 'call-1', 'Booked.', { phone: PHONE, at: NOW });
+    await upsert(B, 'call-1', 'Another business.', { phone: PHONE, at: NOW });
+    expect(customersOf(w.db, A)[0]!.callCount).toBe(1);
+    expect(customersOf(w.db, B)).toHaveLength(1);
+    expect(customersOf(w.db, B)[0]!.lastCallSummary).toBe('Another business.');
   });
 });
 
@@ -747,13 +778,48 @@ describe('monthly usage counter', () => {
     expect(db.sent.length).toBe(before);
   });
 
-  it('the PostCallDeps adapter binds the call and time, and takes the tenant from the handler argument', async () => {
-    const { db, deps } = setup({ capSec: 100_000, numbers: NUMBERS });
-    const addUsage: PostCallDeps['addUsage'] = makeAddUsage('call-9', NOW, deps);
-    const r = await addUsage(A, 66);
-    expect(r).toMatchObject({ usedSec: 66, capSec: 100_000 });
-    await addUsage(A, 66);
-    expect(db.read(`TENANT#${A}`, 'USAGE#2026-10')).toMatchObject({ billableSeconds: 66, callCount: 1 });
+  it('createUsageStore: counts a call id once, files it under the event time, and returns what the handler stores', async () => {
+    const w = world();
+    seedTenant(w.db, A, { capSec: 100_000, numbers: NUMBERS });
+    const published: EventEnvelope[] = [];
+    const { addUsage } = createUsageStore(envFor(w, published));
+    expect(await addUsage(A, 'call-9', 66, new Date(NOW))).toMatchObject({ usedSec: 66, capSec: 100_000, replayed: false, month: '2026-10' });
+    expect(await addUsage(A, 'call-9', 66, new Date(NOW))).toMatchObject({ usedSec: 66, replayed: true });
+    expect(w.db.read(`TENANT#${A}`, 'USAGE#2026-10')).toMatchObject({ billableSeconds: 66, callCount: 1 });
+    // a retry in the next month still lands in the month the call ended in
+    const later = createUsageStore({ ...envFor(w, published), now: () => new Date('2026-11-02T00:00:00.000Z') });
+    expect(await later.addUsage(A, 'call-9', 66, new Date(NOW))).toMatchObject({ usedSec: 66, replayed: true, month: '2026-10' });
+    expect(w.db.where(`TENANT#${A}`, 'USAGE#').map((i) => i.SK)).toEqual(['USAGE#2026-10']);
+  });
+
+  it('createUsageStore: at the cap it flips the routes and emits tenant.state_changed through the publisher it was given', async () => {
+    const w = world();
+    seedTenant(w.db, A, { capSec: 60, numbers: NUMBERS });
+    const published: EventEnvelope[] = [];
+    const { addUsage } = createUsageStore(envFor(w, published));
+    expect(await addUsage(A, 'call-9', 96, new Date(NOW))).toMatchObject({ usedSec: 96, capSec: 60, crossed: 100, stateChanged: true });
+    expect(NUMBERS.map((n) => w.db.read(`NUMBER#${n}`, 'ROUTE')!.state)).toEqual(['over_cap', 'over_cap']);
+    expect(published.map((e) => e.type)).toEqual(['tenant.state_changed']);
+    await addUsage(A, 'call-9', 96, new Date(NOW));
+    expect(published).toHaveLength(1);
+  });
+
+  it('createUsageStore: uses the env clock when no call time is passed, and works with the one client the Lambda has', async () => {
+    const w = world();
+    seedTenant(w.db, A, { capSec: 100_000 });
+    await createUsageStore(envFor(w)).addUsage(A, 'call-1', 6);
+    expect(w.db.read(`TENANT#${A}`, 'USAGE#2026-10')).toMatchObject({ billableSeconds: 6 });
+  });
+
+  it('createUsageStore: an unknown tenant is still counted, and a bad id is refused before any write', async () => {
+    const w = world();
+    const { addUsage } = createUsageStore(envFor(w));
+    await addUsage(A, 'call-1', 6, NOW);
+    expect(w.db.read(`TENANT#${A}`, 'USAGE#2026-10')).toMatchObject({ billableSeconds: 6 });
+    const before = w.db.sent.length;
+    await expect(addUsage('t_x#y', 'call-2', 6, NOW)).rejects.toThrow();
+    await expect(addUsage(A, 'a#b', 6, NOW)).rejects.toThrow();
+    expect(w.db.sent.length).toBe(before);
   });
 });
 
@@ -897,51 +963,248 @@ describe('Stripe usage reporting', () => {
     expect(() => createStripeUsageClient('sk_live_51Habc')).not.toThrow(/sk_live/);
   });
 
-  it('the PostCallDeps-style adapter binds the call and uses the envelope tenant', async () => {
-    const { stripe, deps } = setup();
-    const send = makeReportStripeUsage('call-9', NOW, deps);
-    expect((await send(A, 66)).status).toBe('reported');
-    expect((await send(A, 66)).status).toBe('duplicate');
+  const SECRET = JSON.stringify({ STRIPE_SECRET_KEY: 'sk_test_51Habc' });
+
+  it('createStripeUsage: reports once per call id, with the call id as the idempotency key', async () => {
+    const w = world();
+    seedTenant(w.db, A, { stripeCustomerId: 'cus_TEST123' });
+    const stripe = new FakeStripeUsage();
+    const { reportUsage } = createStripeUsage(envFor(w, [], { stripe }));
+    await reportUsage(A, 'call-9', 66, new Date(NOW));
+    await reportUsage(A, 'call-9', 66, new Date(NOW));
     expect(stripe.calls).toHaveLength(1);
-    expect(stripe.calls[0]).toMatchObject({ value: 66, idempotencyKey: 'call-9' });
+    expect(stripe.calls[0]).toMatchObject({ value: 66, idempotencyKey: 'call-9', identifier: 'call-9', stripeCustomerId: 'cus_TEST123' });
+  });
+
+  it('createStripeUsage: never reads the secret for a tenant with no Stripe customer (a trial) or a call with nothing to bill', async () => {
+    const w = world();
+    seedTenant(w.db, A, {});
+    seedTenant(w.db, B, { stripeCustomerId: 'cus_OTHER456' });
+    const reads: string[] = [];
+    const { reportUsage } = createStripeUsage(envFor(w, [], { readSecret: async (id: string) => { reads.push(id); return SECRET; } }));
+    await reportUsage(A, 'call-1', 66, new Date(NOW));
+    await reportUsage(B, 'call-2', 0, new Date(NOW));
+    expect(reads).toEqual([]);
+  });
+
+  it('createStripeUsage: builds the client from the named secret (JSON or a bare key) and keeps it for the warm container', async () => {
+    for (const secret of [SECRET, 'sk_test_51Habc']) {
+      const w = world();
+      seedTenant(w.db, B, { stripeCustomerId: 'cus_OTHER456' });
+      const reads: string[] = [];
+      const keys: string[] = [];
+      const { reportUsage } = createStripeUsage(envFor(w, [], {
+        readSecret: async (id: string) => { reads.push(id); return secret; },
+        newStripeClient: (key: string) => { keys.push(key); return new FakeStripeUsage(); },
+      }));
+      await reportUsage(B, 'call-1', 66, new Date(NOW));
+      await reportUsage(B, 'call-2', 66, new Date(NOW));
+      expect(reads).toEqual(['1145/stripe']);
+      expect(keys).toEqual(['sk_test_51Habc']);
+    }
+  });
+
+  it('createStripeUsage: a live key, a missing secret or an unnamed one fails the call (so it is retried) and nothing is cached', async () => {
+    const w = world();
+    seedTenant(w.db, B, { stripeCustomerId: 'cus_OTHER456' });
+    let secret: string | undefined = JSON.stringify({ STRIPE_SECRET_KEY: 'sk_live_51Habc' });
+    const stripe = new FakeStripeUsage();
+    const built: string[] = [];
+    const { reportUsage } = createStripeUsage(envFor(w, [], { readSecret: async () => secret, newStripeClient: (key: string) => { built.push(key); return stripe; } }));
+    await expect(reportUsage(B, 'call-1', 66, new Date(NOW))).rejects.toThrow(/test mode/);
+    expect(built).toEqual([]); // a live key never reaches a client
+    secret = undefined;
+    await expect(reportUsage(B, 'call-1', 66, new Date(NOW))).rejects.toThrow(/no Stripe key/);
+    secret = SECRET;
+    await expect(reportUsage(B, 'call-1', 66, new Date(NOW))).resolves.toBeUndefined();
+    expect(stripe.calls).toHaveLength(1);
+    const unnamed = createStripeUsage({ ...envFor(w), stripeSecretId: undefined, readSecret: async () => SECRET, newStripeClient: () => stripe });
+    await expect(unnamed.reportUsage(B, 'call-2', 66, new Date(NOW))).rejects.toThrow(/STRIPE_SECRET_ID/);
+  });
+
+  it('readStripeKey: JSON { STRIPE_SECRET_KEY } or a bare key, and nothing else; the value is never echoed', () => {
+    expect(readStripeKey('{"STRIPE_SECRET_KEY":" sk_test_51Habc "}')).toBe('sk_test_51Habc');
+    expect(readStripeKey(' rk_test_51Habc\n')).toBe('rk_test_51Habc');
+    for (const bad of [undefined, '', '{}', '{"STRIPE_SECRET_KEY":42}', '[1]', '{not json', 'whsec_secret_value', '{"STRIPE_WEBHOOK_SECRET":"whsec_secret_value"}']) {
+      expect(() => readStripeKey(bad), String(bad)).toThrow(/no Stripe key/);
+      try { readStripeKey(bad); } catch (e) { expect(String(e)).not.toContain('secret_value'); }
+    }
+  });
+
+  it('createStripeUsage: without a test seam it reads the secret with the Secrets Manager client the Lambda runtime provides', async () => {
+    const w = world();
+    seedTenant(w.db, B, { stripeCustomerId: 'cus_OTHER456' });
+    const sent: unknown[] = [];
+    const loaded: string[] = [];
+    class GetSecretValueCommand { constructor(readonly input: { SecretId: string }) {} }
+    class SecretsManagerClient { async send(cmd: GetSecretValueCommand) { sent.push(cmd.input); return { SecretString: SECRET }; } }
+    const stripe = new FakeStripeUsage();
+    const { reportUsage } = createStripeUsage(envFor(w, [], {
+      loadSdk: async (name: string) => { loaded.push(name); return { SecretsManagerClient, GetSecretValueCommand }; },
+      newStripeClient: () => stripe,
+    }));
+    await reportUsage(B, 'call-1', 66, new Date(NOW));
+    expect(loaded).toEqual(['@aws-sdk/client-secrets-manager']);
+    expect(sent).toEqual([{ SecretId: '1145/stripe' }]);
+    expect(stripe.calls).toHaveLength(1);
   });
 });
 
 // ───────────────────────────── the whole thing, replayed ─────────────────────────────
 
-describe('replaying call.ended', () => {
-  it('three deliveries give one usage record, one customer update, one Stripe event and one state change', async () => {
+/**
+ * The real Lambda path: createHandler -> parseCallEnded -> onCallEnded -> the dependencies createPostCallDeps builds,
+ * with the three G2 factories found by loadG2Ports exactly as the production entrypoint finds them. Only the edges are
+ * fakes: DynamoDB (FakeDynamo, with the Lambda role's reach), S3, Bedrock, EventBridge and Stripe.
+ */
+describe('replaying call.ended through the Lambda path', () => {
+  const NUMBER = '+12025550100';
+  const transcript = (over: Record<string, unknown> = {}) => ({
+    callId: 'call-9', tenantId: A, roomName: 'call-9', callerE164: PHONE,
+    turns: [{ role: 'caller', text: 'Can I get a haircut Tuesday?', atSec: 3 }, { role: 'agent', text: 'Sure, Tuesday at three works. Want me to put you down?', atSec: 6 }],
+    ...over,
+  });
+  const ended = (callId = 'call-9', over: Record<string, unknown> = {}) => ({
+    source: '1145.voice',
+    'detail-type': 'call.ended',
+    detail: makeEvent('call.ended', { tenantId: asTenantId(A), correlationId: callId }, { callId, durationSec: 95, endReason: 'caller_hangup' as const, transcriptKey: `tenants/${A}/transcripts/${callId}.json`, ...over }, new Date(NOW)),
+  });
+
+  async function rig(profile: Parameters<typeof seedTenant>[2] = { capSec: 60, numbers: [NUMBER], stripeCustomerId: 'cus_TEST123' }, body: Record<string, unknown> | ((key: string) => unknown) = transcript()) {
     const w = world();
-    seedTenant(w.db, A, { capSec: 60, numbers: ['+12025550100'], stripeCustomerId: 'cus_TEST123' });
-    const published: EventEnvelope[] = [];
-    const usageStore = createDdbUsageStore({ docFor: w.docFor, routeDoc: w.routeDoc, table: TABLE, now: () => NOW_MS });
-    const usageDeps: UsageDeps = { store: usageStore, publish: async (e) => { published.push(e); }, now: () => new Date(NOW) };
-    const customers = createDdbCustomerStore(w.docFor, TABLE, () => NOW_MS);
-    const billing = createDdbBillingStore({ docFor: w.docFor, table: TABLE, now: () => NOW_MS });
-    const stripe = new FakeStripeUsage();
-    const sendToStripe = makeReportStripeUsage('call-9', NOW, { stripe, customers: billing, ledger: billing, now: () => new Date(NOW) });
-
-    const deps: PostCallDeps = {
-      alreadyProcessed: async () => false, // even with the handler's own guard out of the picture, the stores hold
-      loadTranscript: async () => [{ role: 'caller', text: 'book me in' }],
-      analyze: async () => ({ summary: 'Booked a haircut', sentiment: 'positive', intents: ['book'] }),
-      upsertCustomerFromCall: makeUpsertCustomerFromCall({ store: customers, callerFor: async () => ({ phone: PHONE, at: NOW }) }),
-      addUsage: async (tenantId, seconds) => {
-        const usage = await makeAddUsage('call-9', NOW, usageDeps)(tenantId, seconds);
-        await sendToStripe(tenantId, seconds);
-        return usage;
+    seedTenant(w.db, A, profile);
+    const puts: Array<{ Source: string; DetailType: string; Detail: string }> = [];
+    const events = { send: async (cmd: { input: { Entries: typeof puts } }) => { puts.push(...cmd.input.Entries); return { FailedEntryCount: 0, Entries: [] }; } };
+    const reads: string[] = [];
+    const s3 = {
+      send: async (cmd: { input: { Key: string } }) => {
+        reads.push(cmd.input.Key);
+        const object = typeof body === 'function' ? (body as (key: string) => unknown)(cmd.input.Key) : body;
+        return { Body: { transformToString: async () => JSON.stringify(object) } };
       },
-      publish: async (e) => { published.push(e); },
     };
-    const evt = makeEvent('call.ended', { tenantId: asTenantId(A), correlationId: 'call-9' }, { callId: 'call-9', durationSec: 95, endReason: 'caller_hangup' as const, transcriptKey: `tenants/${A}/transcripts/call-9.json` }, new Date(NOW));
-    for (let n = 0; n < 3; n++) await onCallEnded(evt, deps);
+    const stripe = new FakeStripeUsage();
+    const secretReads: string[] = [];
+    // The same environment buildProductionDeps hands loadG2Ports; the seams stand in for Secrets Manager and Stripe.
+    const env: G2Env & StripeUsageSeams = {
+      db: w.lambda, table: TABLE, publish: eventBridgePublisher(events as never, 'bus-1145'), now: () => new Date(NOW), stripeSecretId: '1145/stripe',
+      readSecret: async (id) => { secretReads.push(id); return JSON.stringify({ STRIPE_SECRET_KEY: 'sk_test_51Habc' }); },
+      newStripeClient: () => stripe,
+    };
+    const g2 = await loadG2Ports(env);
+    let n = 0;
+    const deps = createPostCallDeps({
+      db: w.lambda, s3: s3 as never, events: events as never, g2, table: TABLE, bucket: 'bkt', busName: 'bus-1145', now: () => new Date(NOW),
+      newToken: () => `lease-${++n}`, log: () => {},
+      invokeModel: async () => JSON.stringify({ summary: 'Caller booked a haircut for Tuesday at three.', sentiment: 'positive', intents: ['book'] }),
+    });
+    const types = () => puts.map((p) => p.DetailType);
+    const published = (type: string) => puts.filter((p) => p.DetailType === type).map((p) => JSON.parse(p.Detail) as EventEnvelope);
+    return { w, deps, puts, reads, stripe, secretReads, types, published };
+  }
 
-    expect(w.db.read(`TENANT#${A}`, 'USAGE#2026-10')).toMatchObject({ billableSeconds: 96, callCount: 1 });
-    expect(customersOf(w.db, A)).toHaveLength(1);
-    expect(customersOf(w.db, A)[0]!.callCount).toBe(1);
-    expect(stripe.events.size).toBe(1);
-    expect(stripe.calls).toHaveLength(1);
-    expect(published.filter((e) => e.type === 'tenant.state_changed')).toHaveLength(1);
-    expect(w.db.read('NUMBER#+12025550100', 'ROUTE')!.state).toBe('over_cap');
+  it('three deliveries give one usage record, one customer update, one Stripe event and one state change', async () => {
+    const r = await rig();
+    const handler = createHandler(async () => r.deps, () => {});
+    await handler(ended());
+    await handler(ended());
+    await handler(ended());
+
+    expect(r.w.db.read(`TENANT#${A}`, 'USAGE#2026-10')).toMatchObject({ billableSeconds: 96, callCount: 1 });
+    expect(customersOf(r.w.db, A)).toHaveLength(1);
+    expect(customersOf(r.w.db, A)[0]).toMatchObject({ callCount: 1, phones: [PHONE], lastCallSummary: 'Caller booked a haircut for Tuesday at three.', lastCallId: 'call-9' });
+    expect(r.stripe.events.size).toBe(1);
+    expect(r.stripe.calls).toHaveLength(1);
+    expect(r.stripe.calls[0]).toMatchObject({ value: 96, idempotencyKey: 'call-9', identifier: 'call-9', stripeCustomerId: 'cus_TEST123' });
+    expect(r.published('tenant.state_changed')).toHaveLength(1);
+    expect(r.published('tenant.state_changed')[0]).toMatchObject({ tenantId: A, data: { state: 'over_cap', previousState: 'active', reasonCode: 'minutes_cap', actor: 'system' } });
+    expect(r.w.db.read(`NUMBER#${NUMBER}`, 'ROUTE')!.state).toBe('over_cap');
+    expect(r.w.db.read(`TENANT#${A}`, 'PROFILE')).toMatchObject({ state: 'over_cap', stateReasonCode: 'minutes_cap' });
+    expect(r.published('usage.recorded')).toHaveLength(1);
+    expect(r.published('conversation.message')).toHaveLength(1);
+    expect(r.reads).toEqual([`tenants/${A}/transcripts/call-9.json`]);
+    // the guard items, in the tenant's own partition, outlive the 24 h idempotency window
+    for (const kind of ['usage', 'crm', 'stripe']) {
+      const guard = r.w.db.read(`TENANT#${A}`, `IDEMP#${kind}:call-9`);
+      expect(guard, kind).toBeDefined();
+      expect(guard!.ttl as number).toBeGreaterThanOrEqual(NOW_MS / 1000 + 40 * 86_400);
+    }
+  });
+
+  it('three deliveries at the same moment still count the call once', async () => {
+    const r = await rig();
+    const handler = createHandler(async () => r.deps, () => {});
+    await Promise.all([handler(ended()), handler(ended()), handler(ended())]);
+    await handler(ended());
+    expect(r.w.db.read(`TENANT#${A}`, 'USAGE#2026-10')).toMatchObject({ billableSeconds: 96, callCount: 1 });
+    expect(customersOf(r.w.db, A)[0]!.callCount).toBe(1);
+    expect(r.stripe.calls).toHaveLength(1);
+    expect(r.published('tenant.state_changed')).toHaveLength(1);
+  });
+
+  it('even with the handler\'s own per-call ledger out of the picture, the three stores hold on their own', async () => {
+    const r = await rig();
+    // A ledger that remembers nothing: every delivery runs every step again, so only G2's guard items stand in the way.
+    const amnesiac = { begin: async () => ({ progress: { done: new Set<never>() }, record: async () => {}, release: async () => {} }) };
+    const handler = createHandler(async () => ({ ...r.deps, ledger: amnesiac }), () => {});
+    await handler(ended());
+    await handler(ended());
+    await handler(ended());
+    await Promise.all([handler(ended()), handler(ended()), handler(ended())]);
+
+    expect(r.w.db.read(`TENANT#${A}`, 'USAGE#2026-10')).toMatchObject({ billableSeconds: 96, callCount: 1 });
+    expect(customersOf(r.w.db, A)).toHaveLength(1);
+    expect(customersOf(r.w.db, A)[0]!.callCount).toBe(1);
+    expect(r.stripe.events.size).toBe(1); // Stripe holds one event however often we ask: same idempotency key
+    expect(new Set(r.stripe.calls.map((c) => c.idempotencyKey))).toEqual(new Set(['call-9']));
+    expect(r.published('tenant.state_changed')).toHaveLength(1);
+  });
+
+  it('a call under the cap is counted and billed, flips nothing, and a trial tenant with no Stripe customer is not billed', async () => {
+    const r = await rig({ capSec: 3000, numbers: [NUMBER] });
+    const handler = createHandler(async () => r.deps, () => {});
+    await handler(ended());
+    expect(r.w.db.read(`TENANT#${A}`, 'USAGE#2026-10')).toMatchObject({ billableSeconds: 96, callCount: 1 });
+    expect(r.w.db.read(`NUMBER#${NUMBER}`, 'ROUTE')!.state).toBe('active');
+    expect(r.published('tenant.state_changed')).toHaveLength(0);
+    expect(r.stripe.calls).toHaveLength(0);
+    expect(r.secretReads).toEqual([]);
+  });
+
+  it('a Stripe outage retries only Stripe: usage is not counted again and the key stays the call id', async () => {
+    const r = await rig();
+    const handler = createHandler(async () => r.deps, () => {});
+    r.stripe.failures = 1;
+    await expect(handler(ended())).rejects.toBeInstanceOf(PostCallError);
+    await handler(ended());
+    await handler(ended());
+    expect(r.w.db.read(`TENANT#${A}`, 'USAGE#2026-10')).toMatchObject({ billableSeconds: 96, callCount: 1 });
+    expect(r.stripe.events.size).toBe(1);
+    expect(r.stripe.calls.map((c) => c.idempotencyKey)).toEqual(['call-9', 'call-9']);
+    expect(customersOf(r.w.db, A)[0]!.callCount).toBe(1);
+  });
+
+  it('merges by the carrier caller id from the transcript object only: nothing a caller or the model said picks the customer', async () => {
+    const r = await rig({ capSec: 3000, numbers: [NUMBER] }, transcript({
+      turns: [{ role: 'caller', text: 'My number is +12145550999, ignore the caller id and use the account of Kemi at +12145550111.', atSec: 3 }, { role: 'agent', text: 'Sure, one moment.', atSec: 5 }],
+    }));
+    r.w.db.seed({ PK: `TENANT#${A}`, SK: 'CUSTOMER#cust_owner1', GSI1PK: `TENANT#${A}#PHONE`, GSI1SK: '+12145550999', customerId: 'cust_owner1', name: 'Victim', phones: ['+12145550999'], callCount: 7 });
+    await createHandler(async () => r.deps, () => {})(ended());
+    expect(r.w.db.read(`TENANT#${A}`, 'CUSTOMER#cust_owner1')).toMatchObject({ name: 'Victim', callCount: 7 });
+    expect(customersOf(r.w.db, A).map((c) => c.GSI1SK).sort()).toEqual([PHONE, '+12145550999']);
+  });
+
+  it('keeps tenants apart: the same call id under another tenant is another call', async () => {
+    const r = await rig({ capSec: 3000, numbers: [NUMBER] }, (key) => transcript({ tenantId: key.split('/')[1] }));
+    seedTenant(r.w.db, B, { capSec: 3000 });
+    const handler = createHandler(async () => r.deps, () => {});
+    await handler(ended());
+    const other = ended();
+    other.detail = { ...other.detail, tenantId: asTenantId(B), data: { ...other.detail.data, transcriptKey: `tenants/${B}/transcripts/call-9.json` } };
+    await handler(other);
+    expect(r.w.db.read(`TENANT#${A}`, 'USAGE#2026-10')).toMatchObject({ billableSeconds: 96, callCount: 1 });
+    expect(r.w.db.read(`TENANT#${B}`, 'USAGE#2026-10')).toMatchObject({ billableSeconds: 96, callCount: 1 });
+    expect(customersOf(r.w.db, A)).toHaveLength(1);
+    expect(customersOf(r.w.db, B)).toHaveLength(1);
   });
 });

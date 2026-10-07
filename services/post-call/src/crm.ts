@@ -13,13 +13,17 @@
  *    overwritten. Fill and `lastSeen` writes carry a compare-and-set on the value that was read; losing the race just
  *    re-reads and re-plans.
  *  - One call counts once: the customer write and an `IDEMP#crm:<callId>` guard item share one transaction.
- *  - The tenant id is the event's. The phone is the carrier caller id fetched server-side (never the model's words), and
- *    the summary is stored as data only, clamped and stripped of control characters.
+ *  - The tenant id is the event's. The phone is the carrier caller id, which the voice worker writes into the transcript
+ *    object (`callerE164`, SEC-24) and the handler passes in: never a number from the words of the call or from the
+ *    model's analysis. A call with no such number is skipped, because there is nothing safe to merge on. The summary is
+ *    stored as data only, clamped and stripped of control characters.
+ *
+ * Entry point for the post-call Lambda: `createCrm(env)`, found by name by deps.ts (contracts/CHANGE_REQUESTS/G3-1.md).
  */
 import { createHash } from 'node:crypto';
 import { GetCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { asTenantId, keys, type TenantId } from '@1145/shared';
-import type { PostCallDeps } from './handler.js';
+import type { G2Env } from './deps.js';
 import { assertCallId, cancellationCodes, guardTtl, replayGuardSk, toDate, type TenantDocProvider } from './usage-store.js';
 
 const E164 = /^\+[1-9]\d{6,14}$/;
@@ -215,7 +219,7 @@ export interface CustomerUpsertInput {
   /** From the call.ended envelope. */
   tenantId: string;
   callId: string;
-  /** Carrier caller id in E.164, looked up server-side. Never taken from the transcript or the analysis. */
+  /** Carrier caller id in E.164 (the worker's `callerE164`). Never taken from what was said or from the analysis. */
   phone: string;
   /** The analysis summary. Stored as data in `lastCallSummary`, never in the owner's notes. */
   summary: string;
@@ -258,35 +262,27 @@ export async function upsertCustomerFromCall(input: CustomerUpsertInput, deps: U
   throw new Error('customer record kept changing; giving up');
 }
 
-// ───────────────────────────── PostCallDeps adapter ─────────────────────────────
+// ───────────────────────────── the Lambda's CRM port ─────────────────────────────
 
+/** What the handler knows about the caller, from the call.ended envelope and the transcript object, never from the model. */
 export interface CallerFacts {
-  /** Carrier caller id, E.164. */
+  /** Carrier caller id, E.164. Absent for web chat and withheld numbers: then no customer is touched. */
   phone?: string;
-  name?: string;
-  /** When the call ended, if known. */
-  at?: string;
+  /** When the call ended (the event's `occurredAt`). Falls back to the env clock. */
+  at?: Date | string;
 }
 
-export interface CrmDeps extends UpsertDeps {
-  /**
-   * Who called, from a source the model cannot influence (the engine's verified SIP caller id). Returns nothing when
-   * the call had no usable number; then the customer step is skipped.
-   */
-  callerFor(tenantId: string, callId: string): Promise<CallerFacts | undefined>;
-  now?: () => Date;
-}
-
-/** Adapter for PostCallDeps.upsertCustomerFromCall. Tenant and call id come from the event via the handler's arguments. */
-export function makeUpsertCustomerFromCall(deps: CrmDeps): PostCallDeps['upsertCustomerFromCall'] {
-  return async (tenantId, callId, summary) => {
-    const caller = await deps.callerFor(tenantId, callId);
-    await upsertCustomerFromCall(
-      {
-        tenantId, callId, summary, phone: caller?.phone ?? '', at: caller?.at ?? (deps.now?.() ?? new Date()),
-        ...(caller?.name ? { name: caller.name } : {}),
-      },
-      deps,
-    );
+/**
+ * The Lambda's CRM port (G3-1). Built once per warm container from the environment deps.ts hands every G2 factory.
+ * Safe to repeat for one `(tenantId, callId)`: the customer write and its per-call guard are one transaction.
+ */
+export function createCrm(env: G2Env): {
+  upsertCustomerFromCall(tenantId: string, callId: string, summary: string, caller?: CallerFacts): Promise<void>;
+} {
+  const store = createDdbCustomerStore(() => env.db, env.table, () => env.now().getTime());
+  return {
+    async upsertCustomerFromCall(tenantId, callId, summary, caller) {
+      await upsertCustomerFromCall({ tenantId, callId, summary, phone: caller?.phone ?? '', at: caller?.at ?? env.now() }, { store });
+    },
   };
 }
