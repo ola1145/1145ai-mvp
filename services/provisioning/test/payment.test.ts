@@ -127,7 +127,7 @@ describe('stripeGateway (fake Stripe client)', () => {
 
   it('the card is collected on a Stripe-hosted page: setup-mode Checkout for this customer, cards only, nothing charged', async () => {
     const { stripe, calls } = fakeStripe();
-    const s = await stripeGateway(stripe, cfg, () => NOW).createSetupSession({ customerId: 'cus_9', onboardingId: ONB });
+    const s = await stripeGateway(stripe, cfg).createSetupSession({ customerId: 'cus_9', onboardingId: ONB });
     expect(s).toEqual({ sessionId: 'cs_test_9', url: 'https://checkout.stripe.test/c/setup/cs_test_9', expiresAt: new Date('2026-10-07T12:00:00Z') });
     const p = calls[0]!.params;
     expect(p.mode).toBe('setup');                                    // creates a SetupIntent underneath; no PaymentIntent, no charge
